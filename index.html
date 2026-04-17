@@ -263,7 +263,7 @@
       </div>
     </div>
     <div class="option-row">
-      <div><div class="option-label">물품검수서 삽입</div><div class="option-desc">내장된 물품검수서 양식을 PDF 맨 뒤에 자동 삽입</div></div>
+      <div><div class="option-label">물품검수서 삽입</div><div class="option-desc">내장된 물품검수서 양식을 요약표 다음 페이지(2페이지)에 자동 삽입</div></div>
       <div class="toggle-group">
         <button class="toggle-btn active" data-insp="on" onclick="setInspMode('on')">포함</button>
         <button class="toggle-btn" data-insp="off" onclick="setInspMode('off')">제외</button>
@@ -281,17 +281,7 @@
     <div class="inv-table-wrap">
       <table class="inv-table" id="invTable">
         <thead>
-          <tr>
-            <th>#</th>
-            <th>기안문 품명</th>
-            <th style="text-align:right">기안 금액</th>
-            <th>물품명 (원문)</th>
-            <th>물품명 (한글)</th>
-            <th style="text-align:center">수량</th>
-            <th style="text-align:right">단가</th>
-            <th style="text-align:right">화표 금액</th>
-          </tr>
-        </thead>
+          </thead>
         <tbody id="invBody"></tbody>
         <tfoot id="invFoot"></tfoot>
       </table>
@@ -303,7 +293,7 @@
       <span class="btn-icon">🔍</span> 기안문-화표 요약 분석 시작
     </button>
     <button class="btn btn-color" id="btnMerge" onclick="processCombined()">
-      <span class="btn-icon">🚀</span> 고화질 컬러+흑백 병합본 다운로드 (검수서 자동포함)
+      <span class="btn-icon">🚀</span> 고화질 컬러+흑백 병합본 다운로드 (검수서 2페이지 자동포함)
     </button>
   </div>
 
@@ -369,24 +359,30 @@ async function loadProposal(file) {
   }
 }
 
+// [수정1 & 2] 기안문 품명, 금액 강력한 노이즈 필터링 및 인식 강화
 function parseProposalItems(text) {
   const items = [];
   const lines = text.split(/\n/);
-  // [수정1] 금액은 반드시 천 단위 콤마(,)가 포함된 숫자만 인식하도록 정규식 강화 (연도 등 오인식 방지)
-  const regex = /([가-힣a-zA-Z0-9\s\-\(\)\[\]]+?)\s+([\d]{1,3}(?:,[\d]{3})+)\s*원?/;
   
   lines.forEach(line => {
-    const numMatch = line.match(regex);
-    if (numMatch) {
-      let name = numMatch[1].trim();
-      const amount = parseInt(numMatch[2].replace(/,/g, ''));
+    const cleanLine = line.replace(/\s+/g, ' ').trim();
+    // 금액 부분에 무조건 천단위 콤마가 포함되어 있도록 하여 연도(2026 등)와 오인식 방지
+    const match = cleanLine.match(/^(.*?)\s+([\d]{1,3}(?:,[\d]{3})+)\s*원?$/);
+    
+    if (match) {
+      let name = match[1].trim();
+      let amountStr = match[2].replace(/,/g, '');
+      let amount = parseInt(amountStr, 10);
       
-      // 문서 헤더의 의미 없는 단어(품의, 합계, 연도 등)를 품명으로 잡는 것 방지
-      const ignoreWords = ['품의', '합계', '총계', '금액', '단가', '수량', '일금', '예산', '잔액'];
-      const isNoise = ignoreWords.some(w => name === w || name.endsWith(w));
-      
-      if (amount > 1000 && name.length > 1 && !isNoise) { 
-        items.push({ name, amount });
+      // 불필요한 단어 및 연도(2026) 노이즈 필터링
+      const isYear = amount >= 2000 && amount <= 2100 && amountStr.length === 4;
+      const isNoiseWord = ['합계', '총계', '소계', '금액', '단가', '수량', '품의', '예산', '잔액', '일시'].some(w => name.includes(w));
+      const isJustDateOrNum = /^[\d\.\-\/\s:a-zA-Z]+$/.test(name); // 날짜 형식이나 영숫자만 있는 경우 무시
+
+      // 정상적인 품명/금액만 배열에 추가
+      if (amount > 0 && !isYear && !isNoiseWord && !isJustDateOrNum && name.length >= 2) {
+         name = name.replace(/^[\*\-\.\s]+/, ''); // 앞부분 특수문자 제거
+         items.push({ name, amount });
       }
     }
   });
@@ -570,18 +566,29 @@ async function analyzeInvoices() {
 }
 
 // ────────────────────────────────────────────
-//  결과 테이블 렌더링 (기안문 순서대로 매칭)
+//  결과 테이블 렌더링 (웹/다운로드 표 동기화 완벽 적용)
 // ────────────────────────────────────────────
 function renderInvoiceTable() {
+  const thead = document.querySelector('#invTable thead');
   const tbody = document.getElementById('invBody');
   const tfoot = document.getElementById('invFoot');
+  
+  const hasProp = proposalData && proposalData.items.length > 0;
+
+  // [수정6] 웹과 PDF의 컬럼 헤더가 똑같아지도록 동적으로 헤더 설정
+  if (hasProp) {
+    thead.innerHTML = `<tr><th>#</th><th>기안문 품명</th><th style="text-align:right">기안 금액</th><th>물품명 (원문)</th><th>물품명 (한글)</th><th style="text-align:center">수량</th><th style="text-align:right">단가</th><th style="text-align:right">화표 금액</th></tr>`;
+  } else {
+    thead.innerHTML = `<tr><th>#</th><th>물품명 (원문)</th><th>물품명 (한글)</th><th style="text-align:center">수량</th><th style="text-align:right">단가</th><th style="text-align:right">금액</th></tr>`;
+  }
+
   tbody.innerHTML = '';
   tfoot.innerHTML = '';
 
   let rowNum = 1;
   let grandTotal = 0;
   let grandCurrency = '';
-  let globalItemIdx = 0; // [수정2] 기안문 항목을 1번부터 차례대로 매칭하기 위한 인덱스
+  let globalItemIdx = 0; 
 
   invoiceData.forEach(inv => {
     const cur = inv.currency || '';
@@ -591,39 +598,49 @@ function renderInvoiceTable() {
       const tr = document.createElement('tr');
       const amt = Number(item.amount) || 0;
 
-      let proposalName = '-';
-      let proposalAmt = '-';
-      
-      // [수정2] 금액 비교(Math.abs) 대신 단순히 순서대로(1:1) 매칭
-      if (proposalData && globalItemIdx < proposalData.items.length) {
-        const matched = proposalData.items[globalItemIdx];
-        proposalName = matched.name;
-        proposalAmt = formatNum(matched.amount);
-      }
-      globalItemIdx++;
+      if (hasProp) {
+        let proposalName = '-';
+        let proposalAmt = '-';
+        if (globalItemIdx < proposalData.items.length) {
+          const matched = proposalData.items[globalItemIdx];
+          proposalName = matched.name;
+          proposalAmt = formatNum(matched.amount);
+        }
+        globalItemIdx++;
 
-      tr.innerHTML = `
-        <td>${rowNum++}</td>
-        <td>${escHtml(proposalName)}</td>
-        <td class="num">${proposalAmt}</td>
-        <td>${escHtml(item.original || '-')}</td>
-        <td><strong>${escHtml(item.korean || '-')}</strong></td>
-        <td class="item-qty" style="text-align:center">${item.qty ?? 1}</td>
-        <td class="num">${item.unitPrice != null ? formatNum(item.unitPrice) : '-'}</td>
-        <td class="num">${formatNum(amt)} <span class="currency-tag">${cur}</span></td>
-      `;
+        tr.innerHTML = `
+          <td>${rowNum++}</td>
+          <td>${escHtml(proposalName)}</td>
+          <td class="num">${proposalAmt}</td>
+          <td>${escHtml(item.original || '-')}</td>
+          <td><strong>${escHtml(item.korean || '-')}</strong></td>
+          <td class="item-qty" style="text-align:center">${item.qty ?? 1}</td>
+          <td class="num">${item.unitPrice != null ? formatNum(item.unitPrice) : '-'}</td>
+          <td class="num">${formatNum(amt)} <span class="currency-tag">${cur}</span></td>
+        `;
+      } else {
+        tr.innerHTML = `
+          <td>${rowNum++}</td>
+          <td>${escHtml(item.original || '-')}</td>
+          <td><strong>${escHtml(item.korean || '-')}</strong></td>
+          <td class="item-qty" style="text-align:center">${item.qty ?? 1}</td>
+          <td class="num">${item.unitPrice != null ? formatNum(item.unitPrice) : '-'}</td>
+          <td class="num">${formatNum(amt)} <span class="currency-tag">${cur}</span></td>
+        `;
+      }
       tbody.appendChild(tr);
     });
 
     if (inv.items && inv.items.length > 0) {
+      const colspan = hasProp ? 7 : 5;
       if (inv.subtotal != null) {
         const sr = document.createElement('tr');
-        sr.innerHTML = `<td colspan="7" style="text-align:right;color:var(--text-muted);font-size:12px">소계 (${escHtml(inv.fileName)})</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.subtotal)} <span class="currency-tag">${cur}</span></td>`;
+        sr.innerHTML = `<td colspan="${colspan}" style="text-align:right;color:var(--text-muted);font-size:12px">소계 (${escHtml(inv.fileName)})</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.subtotal)} <span class="currency-tag">${cur}</span></td>`;
         tbody.appendChild(sr);
       }
       if (inv.tax != null) {
         const tr2 = document.createElement('tr');
-        tr2.innerHTML = `<td colspan="7" style="text-align:right;color:var(--text-muted);font-size:12px">세금</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.tax)} <span class="currency-tag">${cur}</span></td>`;
+        tr2.innerHTML = `<td colspan="${colspan}" style="text-align:right;color:var(--text-muted);font-size:12px">세금</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.tax)} <span class="currency-tag">${cur}</span></td>`;
         tbody.appendChild(tr2);
       }
     }
@@ -632,12 +649,16 @@ function renderInvoiceTable() {
   });
 
   const tfr = document.createElement('tr');
+  const colspan = hasProp ? 7 : 5;
   tfr.className = 'total-row';
   tfr.innerHTML = `
-    <td colspan="7" style="text-align:right;font-size:14px">📦 전체 총 합계</td>
+    <td colspan="${colspan}" style="text-align:right;font-size:14px">📦 전체 총 합계</td>
     <td class="num" style="font-size:16px">${formatNum(grandTotal)} <span class="currency-tag" style="font-size:12px">${grandCurrency}</span></td>
   `;
   tfoot.appendChild(tfr);
+  
+  // 저장용 전역변수에 업데이트 (파일명 생성용)
+  window.currentGrandTotal = grandTotal;
 }
 
 function formatNum(n) {
@@ -665,40 +686,26 @@ async function processCombined() {
 
     const finalDoc = await PDFLib.PDFDocument.create();
 
+    // 1. 화표 요약 첫 페이지 생성 (항상 1페이지)
     if (invMode === 'on' && invoiceData.length > 0) {
       setStatus('화표 요약 페이지 생성 중...', '');
       await insertSummaryPage(finalDoc, paper);
     }
 
-    for (const file of files) {
-      setStatus(`컬러 원본 처리 중: ${file.name}`, '');
-      const srcDoc = await PDFLib.PDFDocument.load(file.buf.slice(0));
-      for (let p = 0; p < srcDoc.getPageCount(); p++) {
-        const [embedded] = await finalDoc.embedPdf(srcDoc, [p]);
-        const { width: origW, height: origH } = embedded;
-        const isLandscape = origW > origH;
-        const pageW = paper.width, pageH = paper.height;
-        const newPage = finalDoc.addPage([pageW, pageH]);
-        let x, y, w, h, angle = 0;
-        if (!isLandscape) {
-          const s = Math.min(pageW/origW, pageH/origH);
-          w = origW*s; h = origH*s; x = (pageW-w)/2; y = (pageH-h)/2;
-        } else if (printMode === 'rotate') {
-          const s = Math.min(pageW/origH, pageH/origW);
-          w = origW*s; h = origH*s; x = (pageW-h)/2; y = (pageH-w)/2; angle = 90;
-        } else {
-          const s = Math.min(pageW/origW, pageH/origH);
-          w = origW*s; h = origH*s; x = (pageW-w)/2; y = (pageH-h)/2;
-        }
-        if (angle === 90) {
-          newPage.drawPage(embedded, { x: x+h, y, width: w, height: h, rotate: PDFLib.degrees(90) });
-        } else {
-          newPage.drawPage(embedded, { x, y, width: w, height: h });
-        }
-        done++; showProgress((done/totalPages)*100);
+    // 2. [수정5] 물품검수서를 요약표 바로 다음(2페이지)에 오도록 순서 재배치
+    if (inspMode === 'on') {
+      try {
+        setStatus('물품검수서 삽입 중...', '');
+        const inspBytes = Uint8Array.from(atob(INSPECTION_FORM_BASE64), c => c.charCodeAt(0));
+        const inspDoc = await PDFLib.PDFDocument.load(inspBytes);
+        const copiedPages = await finalDoc.copyPages(inspDoc, inspDoc.getPageIndices());
+        copiedPages.forEach(p => finalDoc.addPage(p));
+      } catch(e) {
+        console.warn('물품검수서 삽입 실패 (Base64 불완전):', e.message);
       }
     }
 
+    // 3. 원본 화표 파일들 변환 후 병합 (3페이지부터 시작)
     const SCALE = 5;
     for (const file of files) {
       setStatus(`흑백 고화질 변환 중: ${file.name}`, '');
@@ -761,23 +768,22 @@ async function processCombined() {
       }
     }
 
-    if (inspMode === 'on') {
-      try {
-        setStatus('물품검수서 삽입 중...', '');
-        const inspBytes = Uint8Array.from(atob(INSPECTION_FORM_BASE64), c => c.charCodeAt(0));
-        const inspDoc = await PDFLib.PDFDocument.load(inspBytes);
-        const copiedPages = await finalDoc.copyPages(inspDoc, inspDoc.getPageIndices());
-        copiedPages.forEach(p => finalDoc.addPage(p));
-      } catch(e) {
-        console.warn('물품검수서 삽입 실패 (Base64 불완전):', e.message);
-      }
-    }
-
     const pdfBytes = await finalDoc.save();
     const blob = new Blob([pdfBytes], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'merged_with_inspection.pdf'; a.click();
+    a.href = url;
+    
+    // [수정4] 파일명 (오늘 날짜)_(총 금액) 설정
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    const dateStr = `${yyyy}${mm}${dd}`;
+    const amountStr = window.currentGrandTotal || '0';
+    a.download = `${dateStr}_${amountStr}.pdf`;
+    
+    a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
 
     setStatus(`✅ 다운로드 완료! 총 ${totalPages}페이지 고화질 변환 성공`, 'success');
@@ -825,15 +831,16 @@ async function insertSummaryPage(finalDoc, paper) {
   const usable = PW - pad * 2;
   const hasProp = proposalData && proposalData.items.length > 0;
   
+  // [수정3] 다운로드 요약표 파일명 삭제 및 넓이 재조정
   const cols = hasProp
-    ? [0.04, 0.15, 0.13, 0.18, 0.18, 0.06, 0.13, 0.13]
-    : [0.05, 0.22, 0.22, 0.07, 0.14, 0.14, 0.16];
+    ? [0.04, 0.15, 0.13, 0.20, 0.20, 0.06, 0.11, 0.11]
+    : [0.05, 0.25, 0.25, 0.10, 0.15, 0.20]; // 파일명 열을 없애고 6개 컬럼 1.0(100%) 구성
   const headers = hasProp
     ? ['#', '기안품명', '기안금액', '물품명(원문)', '물품명(한글)', '수량', '단가', '화표금액']
-    : ['#', '물품명 (원문)', '물품명 (한글)', '수량', '단가', '금액', '파일명'];
+    : ['#', '물품명 (원문)', '물품명 (한글)', '수량', '단가', '금액'];
   const aligns = hasProp
     ? ['left', 'left', 'right', 'left', 'left', 'center', 'right', 'right']
-    : ['left', 'left', 'left', 'center', 'right', 'right', 'left'];
+    : ['left', 'left', 'left', 'center', 'right', 'right'];
 
   const colX = [];
   let cx = pad;
@@ -852,7 +859,7 @@ async function insertSummaryPage(finalDoc, paper) {
   let rowNum = 1;
   let grandTotal = 0;
   let grandCur = '';
-  let globalItemIdx = 0; // [수정2] 요약표에서도 순서대로 매칭
+  let globalItemIdx = 0; 
   const maxY = PH - pad - 60 * SC;
 
   invoiceData.forEach(inv => {
@@ -891,9 +898,8 @@ async function insertSummaryPage(finalDoc, paper) {
           item.korean || '-',
           String(item.qty ?? 1),
           item.unitPrice != null ? formatNum(item.unitPrice) : '-',
-          formatNum(amt) + (cur ? ' '+cur : ''),
-          inv.fileName.length > 15 ? inv.fileName.substring(0,14)+'…' : inv.fileName,
-        ];
+          formatNum(amt) + (cur ? ' '+cur : '')
+        ]; // 파일명 제외
       }
 
       cells.forEach((c, i) => drawCellText(ctx, c, colX[i], y, usable*cols[i], rowH, aligns[i]));
@@ -927,7 +933,6 @@ async function insertSummaryPage(finalDoc, paper) {
     drawCellText(ctx, '📦 전체 총 합계', colX[0], y, usable*0.68, 30*SC, 'left');
     ctx.font = `bold ${13*SC}px "Space Mono", monospace`;
     
-    // [수정3] 전체 총 합계 글자가 잘리지 않도록 넉넉한 공간 부여 (바로 앞 컬럼부터 두 칸을 사용)
     const targetColIdx = hasProp ? 7 : 5;
     const totalText = formatNum(grandTotal) + (grandCur ? ' ' + grandCur : '');
     const startX = colX[targetColIdx - 1]; 
@@ -938,7 +943,8 @@ async function insertSummaryPage(finalDoc, paper) {
   const jpegB64 = canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
   const imgBytes = Uint8Array.from(atob(jpegB64), c => c.charCodeAt(0));
   const img = await finalDoc.embedJpg(imgBytes);
-  const summaryPage = finalDoc.insertPage(0, [paper.width, paper.height]);
+  // 변경됨: insertPage(0) 대신 addPage() 사용하여 무조건 1페이지에 삽입됨 (finalDoc.create 직후)
+  const summaryPage = finalDoc.addPage([paper.width, paper.height]);
   summaryPage.drawImage(img, { x: 0, y: 0, width: paper.width, height: paper.height });
 }
 
