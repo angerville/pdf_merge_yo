@@ -212,7 +212,19 @@
     <div class="step-line"></div>
     <div class="step" id="step3"><span class="step-num">3</span><span>병합 & 다운로드</span></div>
   </div>
-
+<div class="upload-zone" id="proposalZone" style="margin-bottom: 24px; border-color: var(--accent2); background: rgba(247,162,111,0.03);">
+    <input type="file" accept=".pdf" id="proposalInput">
+    <span class="upload-icon">📝</span>
+    <h2>1. 기안문(품의서) PDF 업로드 (필수)</h2>
+    <p id="proposalNameDisplay">화표와 대조할 기준 기안문을 먼저 업로드해 주세요.</p>
+  </div>
+  
+  <div class="upload-zone" id="uploadZone">
+    <input type="file" accept=".pdf" multiple id="fileInput">
+    <span class="upload-icon">📂</span>
+    <h2>2. PDF 화표 파일 드래그 & 클릭 업로드</h2>
+    <p>영수증, Invoice, 거래명세서 등 여러 파일 선택 가능</p>
+  </div>
   <div class="upload-zone" id="uploadZone">
     <input type="file" accept=".pdf" multiple id="fileInput">
     <span class="upload-icon">📂</span>
@@ -302,7 +314,20 @@ let paperSize = 'A4';
 let invMode = 'on';
 let dragSrcIdx = null;
 let invoiceData = []; 
+// --- 285행 바로 아래에 추가 ---
+let proposalFile = null;
 
+// 기안문 업로드 이벤트 리스너
+document.getElementById('proposalInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file || file.type !== 'application/pdf') return;
+  const buf = await file.arrayBuffer();
+  proposalFile = { name: file.name, buf: buf, pages: 0 };
+  
+  document.getElementById('proposalNameDisplay').innerHTML = `✅ 기안문 등록 완료: <strong>${file.name}</strong>`;
+  document.getElementById('proposalZone').style.borderColor = 'var(--success)';
+  document.getElementById('proposalZone').style.background = 'rgba(79, 209, 165, 0.05)';
+});
 const A4 = { width: 595.28, height: 841.89 };
 const LETTER = { width: 612, height: 792 };
 function getPaper() { return paperSize === 'A4' ? A4 : LETTER; }
@@ -381,7 +406,13 @@ function setStep(n) { [1,2,3].forEach(i => document.getElementById(`step${i}`).c
 // ────────────────────────────────────────────
 async function analyzeInvoices() {
   if (!APPS_SCRIPT_URL || APPS_SCRIPT_URL.includes('여기에')) {
-    setStatus('❌ Apps Script URL이 설정되지 않았습니다. HTML 파일의 APPS_SCRIPT_URL을 입력해 주세요.', 'error');
+    setStatus('❌ Apps Script URL이 설정되지 않았습니다.', 'error');
+    return;
+  }
+  // 추가: 기안문 업로드 확인
+  if (!proposalFile) {
+    setStatus('❌ 기안문(품의서)을 먼저 업로드해 주세요!', 'error');
+    alert('기안문을 먼저 업로드해야 화표와 대조할 수 있습니다.');
     return;
   }
   if (files.length === 0) return;
@@ -393,21 +424,25 @@ async function analyzeInvoices() {
   document.getElementById('analyzingSpinner').style.display = 'inline';
   document.getElementById('invBody').innerHTML = '';
   document.getElementById('invFoot').innerHTML = '';
-  setStatus('화표 이미지 분석 중...', '');
+  setStatus('기안문 및 화표 이미지 분석 중...', '');
   showProgress(0);
 
-const PROMPT = `다음은 화표(영수증/invoice/거래명세서)의 이미지입니다.
-이미지에서 모든 물품 항목을 추출하고 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
+  // 대조용 프롬프트로 교체
+  const PROMPT = `당신은 학교 행정실의 꼼꼼한 회계 검토 담당자입니다.
+제공된 이미지들 중 앞부분은 '기안문(품의서)'이고, 마지막 이미지는 '화표(영수증/거래명세서)'입니다.
+화표에 있는 구매 물품들을 기안문의 '품명' 표와 꼼꼼히 대조하여 매칭한 뒤, 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
 
 {
   "currency": "통화코드(예: CNY, USD, KRW 등)",
   "items": [
     {
-      "original": "원문 물품명",
-      "korean": "한글 번역 물품명",
-      "qty": 수량(숫자, 없으면 1),
-      "unitPrice": 단가(숫자, 없으면 null),
-      "amount": 금액(숫자, 반드시 포함)
+      "proposalName": "매칭된 기안문 품명 (기안문 표에 있는 정확한 명칭, 기안문에서 못 찾으면 null)",
+      "proposedAmount": 기안문에 적힌 해당 품목의 금액(숫자, 기안문에서 못 찾으면 null),
+      "original": "화표의 원문 물품명",
+      "korean": "화표 물품명의 한글 번역",
+      "qty": 화표의 수량(숫자, 없으면 1),
+      "unitPrice": 화표의 단가(숫자, 없으면 null),
+      "amount": 화표의 금액(숫자, 반드시 포함)
     }
   ],
   "subtotal": 소계(숫자 또는 null),
@@ -416,20 +451,32 @@ const PROMPT = `다음은 화표(영수증/invoice/거래명세서)의 이미지
 }
 
 주의사항:
-- **중요**: 합계 금액(total)은 화표 하단 혹은 우측의 '(小写)' 글자 바로 오른쪽에 기재된 세금 포함 총액을 정확히 인식하여 추출하세요.
-- 물품명이 영어/중국어/일본어 등이면 자연스러운 한국어로 번역
-- 금액은 통화 기호나 콤마를 제거한 순수 숫자만 기재
-- 항목이 없으면 items를 빈 배열로 처리`;
+- 중요: 합계 금액(total)은 화표 하단 혹은 우측의 '(小写)' 글자 오른쪽에 기재된 총액을 추출하세요.
+- 금액은 통화 기호나 콤마를 제거한 순수 숫자만 기재하세요.`;
 
   try {
+    // 1. 기안문(PDF)을 Base64 이미지 배열로 변환 (최대 3장)
+    setStatus('기안문 데이터 읽는 중...', '');
+    const proposalImages = [];
+    const propPdfJs = await pdfjsLib.getDocument({ data: proposalFile.buf.slice(0) }).promise;
+    for (let p = 0; p < Math.min(propPdfJs.numPages, 3); p++) {
+      const page = await propPdfJs.getPage(p + 1);
+      const vp = page.getViewport({ scale: 1.5 });
+      const canvas = document.createElement('canvas');
+      canvas.width = vp.width; canvas.height = vp.height;
+      const ctx = canvas.getContext('2d');
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      proposalImages.push(canvas.toDataURL('image/jpeg', 0.8).split(',')[1]);
+    }
+
+    // 2. 화표 파일 반복 처리
     for (let fi = 0; fi < files.length; fi++) {
       const file = files[fi];
-      setStatus(`📄 분석 중: ${file.name} (${fi+1}/${files.length})`, '');
+      setStatus(`📄 화표 대조 중: ${file.name} (${fi+1}/${files.length})`, '');
 
       const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
       const pageImages = [];
-      const pagesToScan = Math.min(file.pages, 3);
-      for (let p = 0; p < pagesToScan; p++) {
+      for (let p = 0; p < Math.min(file.pages, 2); p++) {
         const pdfPage = await pdfJs.getPage(p + 1);
         const vp = pdfPage.getViewport({ scale: 2.0 });
         const canvas = document.createElement('canvas');
@@ -439,12 +486,12 @@ const PROMPT = `다음은 화표(영수증/invoice/거래명세서)의 이미지
         pageImages.push(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
       }
 
+      // 3. Gemini API에 보낼 데이터 조립 (프롬프트 + 기안문 이미지 + 화표 이미지)
       const parts = [{ text: PROMPT }];
-      pageImages.forEach(b64 => {
-        parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
-      });
+      proposalImages.forEach(b64 => parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } }));
+      pageImages.forEach(b64 => parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } }));
 
-      // (기존 코드)
+      // API 호출 (기존 코드와 동일)
       const res = await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
@@ -453,7 +500,6 @@ const PROMPT = `다음은 화표(영수증/invoice/거래명세서)의 이미지
 
       if (!res.ok) throw new Error(`프록시 오류 ${res.status}`);
       const data = await res.json();
-
       if (data.error) throw new Error(data.error.message || 'Gemini API 오류');
 
       let raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
@@ -468,15 +514,14 @@ const PROMPT = `다음은 화표(영수증/invoice/거래명세서)의 이미지
       invoiceData.push({ fileName: file.name, ...parsed });
       showProgress(((fi + 1) / files.length) * 100);
 
-      // ▼▼▼ 여기에 이 3줄을 추가해 주세요! ▼▼▼
+      // 무료 API 제한 방지 대기
       if (fi < files.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 4000)); // 다음 파일 분석 전 4초 대기 (무료 API 제한 방지)
+        await new Promise(resolve => setTimeout(resolve, 4000));
       }
-      // ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
     }
 
     renderInvoiceTable();
-    setStatus('✅ 화표 분석 완료! 아래 표를 확인하세요.', 'success');
+    setStatus('✅ 기안문-화표 대조 분석 완료! 아래 표를 확인하세요.', 'success');
     document.getElementById('analyzingSpinner').style.display = 'none';
   } catch(err) {
     console.error(err);
