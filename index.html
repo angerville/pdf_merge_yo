@@ -65,6 +65,12 @@
   .upload-zone:hover, .upload-zone.drag-over {
     border-color: var(--accent); background: rgba(124,111,247,0.05);
   }
+  .upload-zone.proposal {
+    border-color: var(--accent2); background: rgba(247,162,111,0.03);
+  }
+  .upload-zone.proposal.loaded {
+    border-color: var(--success); background: rgba(79,209,165,0.05);
+  }
   .upload-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
   .upload-icon { font-size: 48px; margin-bottom: 16px; display: block; }
   .upload-zone h2 { font-size: 18px; font-weight: 500; margin-bottom: 8px; }
@@ -202,21 +208,28 @@
 <div class="container">
   <header>
     <h1>📄 PDF 병합 + 화표 분석기</h1>
-    <p>AI 화표 번역 및 물품검수서 자동 삽입 도구</p>
+    <p>기안문-화표 요약 분석 및 물품검수서 자동 삽입 도구</p>
   </header>
 
   <div class="steps">
-    <div class="step active" id="step1"><span class="step-num">1</span><span>화표 업로드</span></div>
+    <div class="step active" id="step1"><span class="step-num">1</span><span>PDF 업로드</span></div>
     <div class="step-line"></div>
-    <div class="step" id="step2"><span class="step-num">2</span><span>AI 분석</span></div>
+    <div class="step" id="step2"><span class="step-num">2</span><span>화표 분석</span></div>
     <div class="step-line"></div>
     <div class="step" id="step3"><span class="step-num">3</span><span>병합 & 다운로드</span></div>
+  </div>
+
+  <div class="upload-zone proposal" id="proposalZone">
+    <input type="file" accept=".pdf" id="proposalInput">
+    <span class="upload-icon">📝</span>
+    <h2>1. 기안문(품의서) PDF 업로드 <span style="font-size:13px;color:var(--text-muted)">(선택)</span></h2>
+    <p id="proposalNameDisplay">화표와 나란히 비교할 기준 기안문을 업로드하세요.</p>
   </div>
 
   <div class="upload-zone" id="uploadZone">
     <input type="file" accept=".pdf" multiple id="fileInput">
     <span class="upload-icon">📂</span>
-    <h2>1. PDF 화표 파일 업로드</h2>
+    <h2>2. PDF 화표 파일 업로드</h2>
     <p>영수증, Invoice, 거래명세서 등 여러 파일 드래그 & 클릭 선택 가능</p>
   </div>
 
@@ -264,17 +277,19 @@
   </div>
 
   <div class="invoice-panel" id="resultPanel">
-    <h3>📋 화표 분석 결과 <span id="analyzingSpinner" style="display:none"><span class="analyzing-spinner">⟳</span> 분석 중...</span></h3>
+    <h3>📋 기안문-화표 요약 분석 결과 <span id="analyzingSpinner" style="display:none"><span class="analyzing-spinner">⟳</span> 분석 중...</span></h3>
     <div class="inv-table-wrap">
       <table class="inv-table" id="invTable">
         <thead>
           <tr>
             <th>#</th>
+            <th>기안문 품명</th>
+            <th style="text-align:right">기안 금액</th>
             <th>물품명 (원문)</th>
             <th>물품명 (한글)</th>
             <th style="text-align:center">수량</th>
             <th style="text-align:right">단가</th>
-            <th style="text-align:right">금액</th>
+            <th style="text-align:right">화표 금액</th>
           </tr>
         </thead>
         <tbody id="invBody"></tbody>
@@ -285,7 +300,7 @@
 
   <div class="actions" id="actions" style="display:none">
     <button class="btn btn-analyze" id="btnAnalyze" onclick="analyzeInvoices()">
-      <span class="btn-icon">🔍</span> 화표 AI 분석 시작
+      <span class="btn-icon">🔍</span> 기안문-화표 요약 분석 시작
     </button>
     <button class="btn btn-color" id="btnMerge" onclick="processCombined()">
       <span class="btn-icon">🚀</span> 고화질 컬러+흑백 병합본 다운로드 (검수서 자동포함)
@@ -314,10 +329,61 @@ let invMode = 'on';
 let inspMode = 'on';
 let dragSrcIdx = null;
 let invoiceData = [];
+let proposalData = null; 
 
 const A4 = { width: 595.28, height: 841.89 };
 const LETTER = { width: 612, height: 792 };
 function getPaper() { return paperSize === 'A4' ? A4 : LETTER; }
+
+// ── 기안문 업로드 ──
+const proposalZone = document.getElementById('proposalZone');
+const proposalInput = document.getElementById('proposalInput');
+
+proposalInput.addEventListener('change', e => {
+  if (e.target.files[0]) loadProposal(e.target.files[0]);
+});
+proposalZone.addEventListener('dragover', e => { e.preventDefault(); proposalZone.classList.add('drag-over'); });
+proposalZone.addEventListener('dragleave', () => proposalZone.classList.remove('drag-over'));
+proposalZone.addEventListener('drop', e => {
+  e.preventDefault(); proposalZone.classList.remove('drag-over');
+  const f = [...e.dataTransfer.files].find(f => f.type === 'application/pdf');
+  if (f) loadProposal(f);
+});
+
+async function loadProposal(file) {
+  try {
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let fullText = '';
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const tc = await page.getTextContent();
+      fullText += tc.items.map(i => i.str).join(' ') + '\n';
+    }
+    proposalData = { text: fullText, items: parseProposalItems(fullText) };
+    proposalZone.classList.add('loaded');
+    document.getElementById('proposalNameDisplay').textContent = `✅ ${file.name} 로드 완료 (${pdf.numPages}페이지)`;
+    document.getElementById('proposalNameDisplay').style.color = 'var(--success)';
+  } catch (err) {
+    setStatus('❌ 기안문 로드 오류: ' + err.message, 'error');
+  }
+}
+
+function parseProposalItems(text) {
+  const items = [];
+  const lines = text.split(/\n/);
+  lines.forEach(line => {
+    // 영문, 숫자, 특수기호가 섞인 품명도 추출할 수 있도록 정규식 보완
+    const numMatch = line.match(/([가-힣a-zA-Z0-9\s\-\(\)\[\]]+?)\s+([\d,]{3,})\s*원?/);
+    if (numMatch) {
+      const amount = parseInt(numMatch[2].replace(/,/g, ''));
+      if (amount > 100) { 
+        items.push({ name: numMatch[1].trim(), amount });
+      }
+    }
+  });
+  return items;
+}
 
 // ── 화표 파일 업로드 ──
 document.getElementById('fileInput').addEventListener('change', e => addFiles(e.target.files));
@@ -454,7 +520,6 @@ async function analyzeInvoices() {
         pageImages.push(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
       }
 
-      // Gemini API 형식 (Apps Script 프록시)
       const parts = [{ text: PROMPT }];
       pageImages.forEach(b64 => {
         parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
@@ -497,7 +562,7 @@ async function analyzeInvoices() {
 }
 
 // ────────────────────────────────────────────
-//  결과 테이블 렌더링
+//  결과 테이블 렌더링 (기안문 나란히 표시, 일치열 제거)
 // ────────────────────────────────────────────
 function renderInvoiceTable() {
   const tbody = document.getElementById('invBody');
@@ -517,8 +582,24 @@ function renderInvoiceTable() {
       const tr = document.createElement('tr');
       const amt = Number(item.amount) || 0;
 
+      let proposalName = '-';
+      let proposalAmt = '-';
+      if (proposalData && proposalData.items.length > 0) {
+        // 금액 기준으로 가장 가까운 항목을 나란히 배치 (비교 판정 삭제)
+        const matched = proposalData.items.reduce((best, pi) => {
+          const diff = Math.abs(pi.amount - amt);
+          return (!best || diff < best.diff) ? { ...pi, diff } : best;
+        }, null);
+        if (matched) {
+          proposalName = matched.name;
+          proposalAmt = formatNum(matched.amount);
+        }
+      }
+
       tr.innerHTML = `
         <td>${rowNum++}</td>
+        <td>${escHtml(proposalName)}</td>
+        <td class="num">${proposalAmt}</td>
         <td>${escHtml(item.original || '-')}</td>
         <td><strong>${escHtml(item.korean || '-')}</strong></td>
         <td class="item-qty" style="text-align:center">${item.qty ?? 1}</td>
@@ -528,16 +609,15 @@ function renderInvoiceTable() {
       tbody.appendChild(tr);
     });
 
-    // 파일별 소계/세금
     if (inv.items && inv.items.length > 0) {
       if (inv.subtotal != null) {
         const sr = document.createElement('tr');
-        sr.innerHTML = `<td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">소계 (${escHtml(inv.fileName)})</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.subtotal)} <span class="currency-tag">${cur}</span></td>`;
+        sr.innerHTML = `<td colspan="7" style="text-align:right;color:var(--text-muted);font-size:12px">소계 (${escHtml(inv.fileName)})</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.subtotal)} <span class="currency-tag">${cur}</span></td>`;
         tbody.appendChild(sr);
       }
       if (inv.tax != null) {
         const tr2 = document.createElement('tr');
-        tr2.innerHTML = `<td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">세금</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.tax)} <span class="currency-tag">${cur}</span></td>`;
+        tr2.innerHTML = `<td colspan="7" style="text-align:right;color:var(--text-muted);font-size:12px">세금</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.tax)} <span class="currency-tag">${cur}</span></td>`;
         tbody.appendChild(tr2);
       }
     }
@@ -548,7 +628,7 @@ function renderInvoiceTable() {
   const tfr = document.createElement('tr');
   tfr.className = 'total-row';
   tfr.innerHTML = `
-    <td colspan="5" style="text-align:right;font-size:14px">📦 전체 총 합계</td>
+    <td colspan="7" style="text-align:right;font-size:14px">📦 전체 총 합계</td>
     <td class="num" style="font-size:16px">${formatNum(grandTotal)} <span class="currency-tag" style="font-size:12px">${grandCurrency}</span></td>
   `;
   tfoot.appendChild(tfr);
@@ -579,13 +659,11 @@ async function processCombined() {
 
     const finalDoc = await PDFLib.PDFDocument.create();
 
-    // ── 화표 요약 첫 페이지 ──
     if (invMode === 'on' && invoiceData.length > 0) {
       setStatus('화표 요약 페이지 생성 중...', '');
       await insertSummaryPage(finalDoc, paper);
     }
 
-    // ── PASS 1: 컬러 원본 ──
     for (const file of files) {
       setStatus(`컬러 원본 처리 중: ${file.name}`, '');
       const srcDoc = await PDFLib.PDFDocument.load(file.buf.slice(0));
@@ -615,7 +693,6 @@ async function processCombined() {
       }
     }
 
-    // ── PASS 2: 흑백 고화질 ──
     const SCALE = 5;
     for (const file of files) {
       setStatus(`흑백 고화질 변환 중: ${file.name}`, '');
@@ -634,7 +711,6 @@ async function processCombined() {
 
         await pdfPage.render({ canvasContext: srcCtx, viewport: srcVp }).promise;
 
-        // 흑백 변환
         const imgData = srcCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
         const d = imgData.data;
         for (let i = 0; i < d.length; i += 4) {
@@ -679,7 +755,6 @@ async function processCombined() {
       }
     }
 
-    // ── 물품검수서 삽입 (맨 뒤) ──
     if (inspMode === 'on') {
       try {
         setStatus('물품검수서 삽입 중...', '');
@@ -725,7 +800,6 @@ async function insertSummaryPage(finalDoc, paper) {
   const pad = 40 * SC;
   let y = pad;
 
-  // 제목 (옵션에서 입력한 값 사용)
   const titleText = document.getElementById('summaryTitle')?.value?.trim() || '화표 품목 요약표';
   ctx.fillStyle = '#1a1a2e';
   ctx.font = `bold ${18*SC}px "Noto Sans KR", sans-serif`;
@@ -743,10 +817,18 @@ async function insertSummaryPage(finalDoc, paper) {
   y += 16 * SC;
 
   const usable = PW - pad * 2;
-  // 변경됨: 기안문 로직 제거
-  const cols = [0.05, 0.22, 0.22, 0.07, 0.14, 0.14, 0.16];
-  const headers = ['#', '물품명 (원문)', '물품명 (한글)', '수량', '단가', '금액', '파일명'];
-  const aligns = ['left', 'left', 'left', 'center', 'right', 'right', 'left'];
+  const hasProp = proposalData && proposalData.items.length > 0;
+  
+  // 일치 여부 열 제거하고 비율 조정
+  const cols = hasProp
+    ? [0.04, 0.15, 0.13, 0.18, 0.18, 0.06, 0.13, 0.13]
+    : [0.05, 0.22, 0.22, 0.07, 0.14, 0.14, 0.16];
+  const headers = hasProp
+    ? ['#', '기안품명', '기안금액', '물품명(원문)', '물품명(한글)', '수량', '단가', '화표금액']
+    : ['#', '물품명 (원문)', '물품명 (한글)', '수량', '단가', '금액', '파일명'];
+  const aligns = hasProp
+    ? ['left', 'left', 'right', 'left', 'left', 'center', 'right', 'right']
+    : ['left', 'left', 'left', 'center', 'right', 'right', 'left'];
 
   const colX = [];
   let cx = pad;
@@ -779,15 +861,33 @@ async function insertSummaryPage(finalDoc, paper) {
       ctx.font = `${7.5*SC}px "Noto Sans KR", sans-serif`;
       const amt = Number(item.amount) || 0;
 
-      const cells = [
-        String(rowNum++),
-        item.original || '-',
-        item.korean || '-',
-        String(item.qty ?? 1),
-        item.unitPrice != null ? formatNum(item.unitPrice) : '-',
-        formatNum(amt) + (cur ? ' '+cur : ''),
-        inv.fileName.length > 15 ? inv.fileName.substring(0,14)+'…' : inv.fileName,
-      ];
+      let cells;
+      if (hasProp) {
+        const matched = proposalData.items.reduce((best, pi) => {
+          const diff = Math.abs(pi.amount - amt);
+          return (!best || diff < best.diff) ? { ...pi, diff } : best;
+        }, null);
+        cells = [
+          String(rowNum++),
+          matched?.name || '-',
+          matched ? formatNum(matched.amount) : '-',
+          item.original || '-',
+          item.korean || '-',
+          String(item.qty ?? 1),
+          item.unitPrice != null ? formatNum(item.unitPrice) : '-',
+          formatNum(amt) + (cur ? ' '+cur : '')
+        ];
+      } else {
+        cells = [
+          String(rowNum++),
+          item.original || '-',
+          item.korean || '-',
+          String(item.qty ?? 1),
+          item.unitPrice != null ? formatNum(item.unitPrice) : '-',
+          formatNum(amt) + (cur ? ' '+cur : ''),
+          inv.fileName.length > 15 ? inv.fileName.substring(0,14)+'…' : inv.fileName,
+        ];
+      }
 
       cells.forEach((c, i) => drawCellText(ctx, c, colX[i], y, usable*cols[i], rowH, aligns[i]));
       y += rowH;
@@ -799,8 +899,9 @@ async function insertSummaryPage(finalDoc, paper) {
         ctx.fillRect(pad, y, usable, rowH);
         ctx.fillStyle = '#5a50d0';
         ctx.font = `bold ${7.5*SC}px "Noto Sans KR", sans-serif`;
-        drawCellText(ctx, `소계: ${inv.fileName}`, colX[0], y, usable*0.7, rowH, 'left');
-        drawCellText(ctx, formatNum(inv.total)+(cur?' '+cur:''), colX[5], y, usable*cols[5], rowH, 'right');
+        drawCellText(ctx, `소계: ${inv.fileName}`, colX[0], y, usable*0.68, rowH, 'left');
+        const targetColIdx = hasProp ? 7 : 5;
+        drawCellText(ctx, formatNum(inv.total)+(cur?' '+cur:''), colX[targetColIdx], y, usable*cols[targetColIdx], rowH, 'right');
         y += rowH;
       }
       grandTotal += Number(inv.total);
@@ -816,9 +917,10 @@ async function insertSummaryPage(finalDoc, paper) {
     ctx.fillRect(pad, y, usable, 30*SC);
     ctx.fillStyle = '#c0541a';
     ctx.font = `bold ${11*SC}px "Noto Sans KR", sans-serif`;
-    drawCellText(ctx, '📦 전체 총 합계', colX[0], y, usable*0.7, 30*SC, 'left');
+    drawCellText(ctx, '📦 전체 총 합계', colX[0], y, usable*0.68, 30*SC, 'left');
     ctx.font = `bold ${13*SC}px "Space Mono", monospace`;
-    drawCellText(ctx, formatNum(grandTotal)+(grandCur?' '+grandCur:''), colX[5], y, usable*cols[5], 30*SC, 'right');
+    const targetColIdx = hasProp ? 7 : 5;
+    drawCellText(ctx, formatNum(grandTotal)+(grandCur?' '+grandCur:''), colX[targetColIdx], y, usable*cols[targetColIdx], 30*SC, 'right');
   }
 
   const jpegB64 = canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
