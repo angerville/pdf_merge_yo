@@ -204,7 +204,8 @@
     <h1>📄 PDF 병합 + 화표 분석기</h1>
     <p>화표(영수증/invoice)를 Gemini AI로 인식하여 한글 번역표를 병합 PDF 첫 페이지에 삽입합니다</p>
   </header>
-<div class="steps">
+
+  <div class="steps">
     <div class="step active" id="step1"><span class="step-num">1</span><span>PDF 업로드</span></div>
     <div class="step-line"></div>
     <div class="step" id="step2"><span class="step-num">2</span><span>화표 분석</span></div>
@@ -227,6 +228,7 @@
   </div>
 
   <div class="file-list" id="fileList"></div>
+
 <div class="options-panel" id="optionsPanel" style="display:none">
     <h3>변환 옵션</h3>
     <div class="option-row">
@@ -268,11 +270,13 @@
         <thead>
           <tr>
             <th>#</th>
+            <th>기안문 품명</th>
+            <th style="text-align:right">기안 금액</th>
             <th>물품명 (원문)</th>
             <th>물품명 (한글)</th>
             <th>수량</th>
             <th style="text-align:right">단가</th>
-            <th style="text-align:right">금액</th>
+            <th style="text-align:right">화표 금액</th>
           </tr>
         </thead>
         <tbody id="invBody"></tbody>
@@ -307,7 +311,7 @@ let paperSize = 'A4';
 let invMode = 'on';
 let dragSrcIdx = null;
 let invoiceData = []; 
-// --- 285행 바로 아래에 추가 ---
+
 let proposalFile = null;
 
 // 기안문 업로드 이벤트 리스너
@@ -321,6 +325,7 @@ document.getElementById('proposalInput').addEventListener('change', async (e) =>
   document.getElementById('proposalZone').style.borderColor = 'var(--success)';
   document.getElementById('proposalZone').style.background = 'rgba(79, 209, 165, 0.05)';
 });
+
 const A4 = { width: 595.28, height: 841.89 };
 const LETTER = { width: 612, height: 792 };
 function getPaper() { return paperSize === 'A4' ? A4 : LETTER; }
@@ -544,8 +549,10 @@ function renderInvoiceTable() {
       const amt = Number(item.amount) || 0;
       tr.innerHTML = `
         <td>${rowNum++}</td>
+        <td><strong>${escHtml(item.proposalName || '-')}</strong></td>
+        <td class="num" style="color:var(--accent2); font-weight:bold;">${item.proposedAmount != null ? formatNum(item.proposedAmount) : '-'}</td>
         <td>${escHtml(item.original || '-')}</td>
-        <td><strong>${escHtml(item.korean || '-')}</strong></td>
+        <td>${escHtml(item.korean || '-')}</td>
         <td class="item-qty">${item.qty ?? 1}</td>
         <td class="num">${item.unitPrice != null ? formatNum(item.unitPrice) : '-'}</td>
         <td class="num">${formatNum(amt)} <span class="currency-tag">${cur}</span></td>
@@ -556,12 +563,12 @@ function renderInvoiceTable() {
     if (inv.items && inv.items.length > 0) {
       if (inv.subtotal != null) {
         const sr = document.createElement('tr');
-        sr.innerHTML = `<td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">소계 (${escHtml(inv.fileName)})</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.subtotal)} <span class="currency-tag">${cur}</span></td>`;
+        sr.innerHTML = `<td colspan="7" style="text-align:right;color:var(--text-muted);font-size:12px">소계 (${escHtml(inv.fileName)})</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.subtotal)} <span class="currency-tag">${cur}</span></td>`;
         tbody.appendChild(sr);
       }
       if (inv.tax != null) {
         const tr2 = document.createElement('tr');
-        tr2.innerHTML = `<td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">세금</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.tax)} <span class="currency-tag">${cur}</span></td>`;
+        tr2.innerHTML = `<td colspan="7" style="text-align:right;color:var(--text-muted);font-size:12px">세금</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.tax)} <span class="currency-tag">${cur}</span></td>`;
         tbody.appendChild(tr2);
       }
     }
@@ -572,7 +579,7 @@ function renderInvoiceTable() {
   const tfr = document.createElement('tr');
   tfr.className = 'total-row';
   tfr.innerHTML = `
-    <td colspan="5" style="text-align:right;font-size:14px">📦 전체 총 합계</td>
+    <td colspan="7" style="text-align:right;font-size:14px">📦 전체 총 합계</td>
     <td class="num" style="font-size:16px">${formatNum(grandTotal)} <span class="currency-tag" style="font-size:12px">${grandCurrency}</span></td>
   `;
   tfoot.appendChild(tfr);
