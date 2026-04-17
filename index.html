@@ -721,14 +721,14 @@ async function insertSummaryPage(finalDoc, paper) {
   ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(PW - pad, y); ctx.stroke();
   y += 16 * SC;
 
-  // 컬럼 너비 (6개 열로 변경 및 물품명 비율 확대)
+  // 컬럼 너비 (8개 열로 비율 재조정)
   const usable = PW - pad * 2;
-  const cols = [0.05, 0.30, 0.30, 0.07, 0.14, 0.14];
+  const cols = [0.04, 0.15, 0.10, 0.22, 0.22, 0.05, 0.10, 0.12];
   const colX = [];
   let cx = pad;
   cols.forEach(r => { colX.push(cx); cx += usable * r; });
 
-  const headers = ['#', '물품명 (원문)', '물품명 (한글)', '수량', '단가', '금액'];
+  const headers = ['#', '기안문 품명', '기안 금액', '물품명 (원문)', '물품명 (한글)', '수량', '단가', '화표 금액'];
   const rowH = 22 * SC;
 
   ctx.fillStyle = '#f0eeff';
@@ -737,7 +737,10 @@ async function insertSummaryPage(finalDoc, paper) {
   ctx.fillStyle = '#5a50d0';
   ctx.font = `bold ${8*SC}px "Noto Sans KR", sans-serif`;
   headers.forEach((h, i) => {
-    const align = i >= 4 ? 'right' : 'left';
+    // 숫자 데이터가 들어가는 2(기안금액), 5(수량), 6(단가), 7(금액)열의 정렬 조정
+    let align = 'left';
+    if (i === 2 || i >= 6) align = 'right';
+    if (i === 5) align = 'center';
     drawCellText(ctx, h, colX[i], y, usable * cols[i], rowH, align);
   });
   y += rowH;
