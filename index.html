@@ -344,45 +344,99 @@ async function loadProposal(file) {
   try {
     const buf = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
-    let fullText = '';
-    for (let p = 1; p <= pdf.numPages; p++) {
-      const page = await pdf.getPage(p);
-      const tc = await page.getTextContent();
-      fullText += tc.items.map(i => i.str).join(' ') + '\n';
+
+    document.getElementById('proposalNameDisplay').textContent = `⏳ ${file.name} AI 분석 중...`;
+    document.getElementById('proposalNameDisplay').style.color = 'var(--accent2)';
+
+    // PDF 페이지를 이미지로 변환
+    const pageImages = [];
+    const pagesToScan = Math.min(pdf.numPages, 5);
+    for (let p = 0; p < pagesToScan; p++) {
+      const pdfPage = await pdf.getPage(p + 1);
+      const vp = pdfPage.getViewport({ scale: 2.0 });
+      const canvas = document.createElement('canvas');
+      canvas.width = vp.width; canvas.height = vp.height;
+      await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      pageImages.push(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
     }
-    proposalData = { text: fullText, items: parseProposalItems(fullText) };
+
+    // Gemini AI로 기안문 분석
+    const PROPOSAL_PROMPT = `이것은 학교 기안문(품의서)입니다.
+문서에서 구매 품목 목록을 추출하세요. 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
+
+{
+  "items": [
+    {
+      "name": "품명 (한글로, 간결하게)",
+      "amount": 금액(숫자, 통화기호 제거),
+      "currency": "통화코드 (KRW, CNY, USD 등, 없으면 KRW)"
+    }
+  ]
+}
+
+주의사항:
+- 합계/총계/소계 행은 제외
+- 단가×수량=금액인 경우 금액(합산)을 사용
+- 항목이 명확하지 않으면 빈 배열`;
+
+    const parts = [{ text: PROPOSAL_PROMPT }];
+    pageImages.forEach(b64 => {
+      parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
+    });
+
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ parts })
+    });
+
+    if (!res.ok) throw new Error(`프록시 오류 ${res.status}`);
+    const data = await res.json();
+    let raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    raw = raw.replace(/```json|```/g, '').trim();
+
+    let parsed;
+    try { parsed = JSON.parse(raw); } catch(e) {
+      console.warn('기안문 JSON 파싱 실패, 텍스트 파싱 시도:', raw);
+      // 폴백: 텍스트 추출 후 기존 방식
+      let fullText = '';
+      for (let p = 1; p <= pdf.numPages; p++) {
+        const page = await pdf.getPage(p);
+        const tc = await page.getTextContent();
+        fullText += tc.items.map(i => i.str).join(' ') + '\n';
+      }
+      parsed = { items: parseProposalItemsFallback(fullText) };
+    }
+
+    proposalData = { items: parsed.items || [] };
     proposalZone.classList.add('loaded');
-    document.getElementById('proposalNameDisplay').textContent = `✅ ${file.name} 로드 완료 (${pdf.numPages}페이지)`;
+    document.getElementById('proposalNameDisplay').textContent =
+      `✅ ${file.name} 분석 완료 — ${proposalData.items.length}개 품목 인식`;
     document.getElementById('proposalNameDisplay').style.color = 'var(--success)';
   } catch (err) {
     setStatus('❌ 기안문 로드 오류: ' + err.message, 'error');
+    document.getElementById('proposalNameDisplay').textContent = '❌ 분석 실패 — 다시 시도하세요';
+    document.getElementById('proposalNameDisplay').style.color = 'var(--danger)';
   }
 }
 
-// [수정1 & 2] 기안문 품명, 금액 강력한 노이즈 필터링 및 인식 강화
-function parseProposalItems(text) {
+// 폴백용 텍스트 파싱 (AI 실패 시)
+function parseProposalItemsFallback(text) {
   const items = [];
   const lines = text.split(/\n/);
   const NOISE = ['합계', '총계', '소계', '금액', '단가', '수량', '품의', '예산', '잔액', '일시'];
-
   lines.forEach(line => {
     const cl = line.replace(/\s+/g, ' ').trim();
-
-    // [수정1] 小写 옆 금액 우선 인식 (예: 小写 1,234.56 또는 小写 1234.56)
     const xiaoxieMatch = cl.match(/小写\s*([\d,]+(?:\.\d+)?)/);
     if (xiaoxieMatch) {
       const amt = parseFloat(xiaoxieMatch[1].replace(/,/g, ''));
       if (amt > 0) {
-        // 品명은 같은 줄 앞부분이나 직전 줄에서 추출 시도
         const beforeXiao = cl.split('小写')[0].trim().replace(/^[\*\-\.\s]+/, '');
-        const name = (beforeXiao.length >= 2 && !/^[\d\.\-\/\s:]+$/.test(beforeXiao))
-          ? beforeXiao : '기안 품목';
-        items.push({ name, amount: amt });
-        return; // 이 줄은 완료
+        const name = (beforeXiao.length >= 2 && !/^[\d\.\-\/\s:]+$/.test(beforeXiao)) ? beforeXiao : '기안 품목';
+        items.push({ name, amount: amt, currency: 'CNY' });
+        return;
       }
     }
-
-    // 기존 패턴: 품명 + 천단위 콤마 금액
     const match = cl.match(/^(.*?)\s+([\d]{1,3}(?:,[\d]{3})+(?:\.\d+)?)\s*원?$/);
     if (match) {
       let name = match[1].trim();
@@ -392,7 +446,7 @@ function parseProposalItems(text) {
       const isDateOrNum = /^[\d\.\-\/\s:a-zA-Z]+$/.test(name);
       if (amt > 0 && !isYear && !isNoise && !isDateOrNum && name.length >= 2) {
         name = name.replace(/^[\*\-\.\s]+/, '');
-        items.push({ name, amount: amt });
+        items.push({ name, amount: amt, currency: 'KRW' });
       }
     }
   });
@@ -562,6 +616,12 @@ async function analyzeInvoices() {
       showProgress(((fi + 1) / files.length) * 100);
     }
 
+    // 기안문이 있으면 AI 매칭 수행
+    if (proposalData && proposalData.items.length > 0) {
+      setStatus('🔗 기안문-화표 AI 매칭 중...', '');
+      await matchProposalToInvoices();
+    }
+
     renderInvoiceTable();
     setStatus('✅ 화표 분석 완료! 아래 표를 확인하세요.', 'success');
     setStep(3);
@@ -572,6 +632,78 @@ async function analyzeInvoices() {
     document.getElementById('analyzingSpinner').style.display = 'none';
   } finally {
     btnA.disabled = false;
+  }
+}
+
+// ─────────────────────────────────────────────────────
+//  기안문 ↔ 화표 AI 의미 기반 매칭
+// ─────────────────────────────────────────────────────
+async function matchProposalToInvoices() {
+  // 화표의 모든 아이템 수집
+  const invoiceItems = [];
+  invoiceData.forEach((inv, iIdx) => {
+    (inv.items || []).forEach((item, jIdx) => {
+      invoiceItems.push({
+        iIdx, jIdx,
+        korean: item.korean || '',
+        original: item.original || '',
+        amount: item.amount
+      });
+    });
+  });
+
+  if (invoiceItems.length === 0 || proposalData.items.length === 0) return;
+
+  const MATCH_PROMPT = `아래는 기안문(품의서)의 품목 목록과 화표(영수증)의 품목 목록입니다.
+각 화표 품목이 기안문의 어느 품목에 해당하는지 매칭하세요.
+의미/용도가 같거나 유사한 것을 매칭하고, 해당 없으면 null로 표시하세요.
+반드시 아래 JSON 형식으로만 응답하세요. 다른 텍스트 절대 포함 금지.
+
+기안문 품목:
+${proposalData.items.map((it, i) => `[${i}] ${it.name} (${it.amount} ${it.currency || ''})`).join('\n')}
+
+화표 품목:
+${invoiceItems.map((it, i) => `[${i}] ${it.korean} / ${it.original} (${it.amount})`).join('\n')}
+
+응답 형식:
+{
+  "matches": [
+    { "invoiceIdx": 화표품목번호, "proposalIdx": 기안문품목번호 또는 null }
+  ]
+}`;
+
+  try {
+    const res = await fetch(APPS_SCRIPT_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: JSON.stringify({ parts: [{ text: MATCH_PROMPT }] })
+    });
+    if (!res.ok) throw new Error(`매칭 프록시 오류 ${res.status}`);
+    const data = await res.json();
+    let raw = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+    raw = raw.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(raw);
+
+    // 매칭 결과를 invoiceData에 기록
+    (parsed.matches || []).forEach(m => {
+      const inv_item = invoiceItems[m.invoiceIdx];
+      if (!inv_item) return;
+      const prop = m.proposalIdx != null ? proposalData.items[m.proposalIdx] : null;
+      invoiceData[inv_item.iIdx].items[inv_item.jIdx]._matched = prop
+        ? { name: prop.name, amount: prop.amount, currency: prop.currency || '' }
+        : null;
+    });
+  } catch(e) {
+    console.warn('AI 매칭 실패, 순서 기반 폴백:', e);
+    // 폴백: 순서 기반
+    let globalIdx = 0;
+    invoiceData.forEach(inv => {
+      (inv.items || []).forEach(item => {
+        const prop = proposalData.items[globalIdx] || null;
+        item._matched = prop ? { name: prop.name, amount: prop.amount, currency: prop.currency || '' } : null;
+        globalIdx++;
+      });
+    });
   }
 }
 
@@ -609,19 +741,16 @@ function renderInvoiceTable() {
       const amt = Number(item.amount) || 0;
 
       if (hasProp) {
-        let proposalName = '-';
-        let proposalAmt = '-';
-        if (globalItemIdx < proposalData.items.length) {
-          const matched = proposalData.items[globalItemIdx];
-          proposalName = matched.name;
-          proposalAmt = formatNum(matched.amount);
-        }
+        const matched = item._matched || null;
+        const proposalName = matched ? matched.name : '-';
+        const proposalAmt = matched ? formatNum(matched.amount) : '-';
+        const proposalCur = matched ? (matched.currency || '') : '';
         globalItemIdx++;
 
         tr.innerHTML = `
           <td>${rowNum++}</td>
           <td>${escHtml(proposalName)}</td>
-          <td class="num">${proposalAmt}</td>
+          <td class="num">${proposalAmt}<span class="currency-tag">${proposalCur}</span></td>
           <td>${escHtml(item.original || '-')}</td>
           <td><strong>${escHtml(item.korean || '-')}</strong></td>
           <td class="item-qty" style="text-align:center">${item.qty ?? 1}</td>
@@ -717,11 +846,11 @@ async function processCombined() {
       }
     }
 
-    // 3. 원본 화표 파일들 변환 후 병합 — 컬러 + 흑백 각 1장씩
+    // 3. 원본 화표 파일들 변환 후 병합 — 전체 컬러 먼저, 전체 흑백 나중
     const SCALE = 5;
 
-    // 페이지당 렌더된 srcCanvas를 컬러/흑백 각각 PDF에 추가하는 헬퍼
-    async function addPageToDoc(doc, srcCanvas, origW, origH, paper) {
+    // 렌더된 srcCanvas를 지정 doc에 컬러 또는 흑백으로 추가하는 헬퍼
+    async function addPageToDoc(doc, srcCanvas, origW, origH, paper, grayscale) {
       const { width: pageW, height: pageH } = paper;
       const isLandscape = origW > origH;
       const outCanvas = document.createElement('canvas');
@@ -741,41 +870,8 @@ async function processCombined() {
         drawW = origW*s; drawH = origH*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
       }
 
-      if (rotation === 90) {
-        octx.save();
-        octx.translate((drawX+drawW/2)*SCALE, (drawY+drawH/2)*SCALE);
-        octx.rotate(-Math.PI/2);
-        octx.drawImage(srcCanvas, -drawH*SCALE/2, -drawW*SCALE/2, drawH*SCALE, drawW*SCALE);
-        octx.restore();
-      } else {
-        octx.drawImage(srcCanvas, drawX*SCALE, drawY*SCALE, drawW*SCALE, drawH*SCALE);
-      }
-
-      const imgBytes = dataURLtoBytes(outCanvas.toDataURL('image/jpeg', 0.95));
-      const img = await doc.embedJpg(imgBytes);
-      const pg = doc.addPage([pageW, pageH]);
-      pg.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
-    }
-
-    for (const file of files) {
-      setStatus(`컬러+흑백 고화질 변환 중: ${file.name}`, '');
-      const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
-      for (let p = 0; p < pdfJs.numPages; p++) {
-        const pdfPage = await pdfJs.getPage(p + 1);
-        const origVp = pdfPage.getViewport({ scale: 1 });
-        const origW = origVp.width, origH = origVp.height;
-
-        // 고해상도 렌더
-        const srcCanvas = document.createElement('canvas');
-        const srcVp = pdfPage.getViewport({ scale: SCALE * 1.5 });
-        srcCanvas.width = srcVp.width; srcCanvas.height = srcVp.height;
-        await pdfPage.render({ canvasContext: srcCanvas.getContext('2d'), viewport: srcVp }).promise;
-
-        // 컬러 페이지 추가
-        await addPageToDoc(finalDoc, srcCanvas, origW, origH, paper);
-        done++; showProgress((done/totalPages)*100);
-
-        // 흑백 페이지 추가 (별도 canvas에 그레이스케일 복사)
+      let drawSrc = srcCanvas;
+      if (grayscale) {
         const grayCanvas = document.createElement('canvas');
         grayCanvas.width = srcCanvas.width; grayCanvas.height = srcCanvas.height;
         const gctx = grayCanvas.getContext('2d');
@@ -787,9 +883,55 @@ async function processCombined() {
           d[i] = d[i+1] = d[i+2] = g;
         }
         gctx.putImageData(imgData, 0, 0);
-        await addPageToDoc(finalDoc, grayCanvas, origW, origH, paper);
-        done++; showProgress((done/totalPages)*100);
+        drawSrc = grayCanvas;
       }
+
+      if (rotation === 90) {
+        octx.save();
+        octx.translate((drawX+drawW/2)*SCALE, (drawY+drawH/2)*SCALE);
+        octx.rotate(-Math.PI/2);
+        octx.drawImage(drawSrc, -drawH*SCALE/2, -drawW*SCALE/2, drawH*SCALE, drawW*SCALE);
+        octx.restore();
+      } else {
+        octx.drawImage(drawSrc, drawX*SCALE, drawY*SCALE, drawW*SCALE, drawH*SCALE);
+      }
+
+      const imgBytes = dataURLtoBytes(outCanvas.toDataURL('image/jpeg', 0.95));
+      const img = await doc.embedJpg(imgBytes);
+      const pg = doc.addPage([pageW, pageH]);
+      pg.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
+    }
+
+    // 모든 파일의 렌더된 페이지 canvas를 미리 수집
+    const renderedPages = []; // { srcCanvas, origW, origH }
+    for (const file of files) {
+      setStatus(`고화질 렌더링 중: ${file.name}`, '');
+      const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
+      for (let p = 0; p < pdfJs.numPages; p++) {
+        const pdfPage = await pdfJs.getPage(p + 1);
+        const origVp = pdfPage.getViewport({ scale: 1 });
+        const origW = origVp.width, origH = origVp.height;
+        const srcCanvas = document.createElement('canvas');
+        const srcVp = pdfPage.getViewport({ scale: SCALE * 1.5 });
+        srcCanvas.width = srcVp.width; srcCanvas.height = srcVp.height;
+        await pdfPage.render({ canvasContext: srcCanvas.getContext('2d'), viewport: srcVp }).promise;
+        renderedPages.push({ srcCanvas, origW, origH });
+        done++; showProgress((done/totalPages)*30);
+      }
+    }
+
+    // 컬러 순서대로 전부 추가
+    setStatus('컬러 페이지 병합 중...', '');
+    for (const rp of renderedPages) {
+      await addPageToDoc(finalDoc, rp.srcCanvas, rp.origW, rp.origH, paper, false);
+      done++; showProgress(30 + (done/totalPages)*35);
+    }
+
+    // 흑백 순서대로 전부 추가
+    setStatus('흑백 페이지 병합 중...', '');
+    for (const rp of renderedPages) {
+      await addPageToDoc(finalDoc, rp.srcCanvas, rp.origW, rp.origH, paper, true);
+      done++; showProgress(65 + (done/totalPages)*35);
     }
 
     const pdfBytes = await finalDoc.save();
@@ -900,10 +1042,7 @@ async function insertSummaryPage(finalDoc, paper) {
 
       let cells;
       if (hasProp) {
-        let matched = null;
-        if (globalItemIdx < proposalData.items.length) {
-          matched = proposalData.items[globalItemIdx];
-        }
+        const matched = item._matched || null;
         cells = [
           String(rowNum++),
           matched?.name || '-',
