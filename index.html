@@ -761,13 +761,15 @@ async function insertSummaryPage(finalDoc, paper) {
       const amt = Number(item.amount) || 0;
       const cells = [
         String(rowNum++),
+        item.proposalName || '-',
+        item.proposedAmount != null ? formatNum(item.proposedAmount) : '-',
         item.original || '-',
         item.korean || '-',
         String(item.qty ?? 1),
         item.unitPrice != null ? formatNum(item.unitPrice) : '-',
         formatNum(amt) + (cur ? ' ' + cur : '')
       ];
-      const aligns = ['left','left','left','left','right','right'];
+      const aligns = ['left','left','right','left','left','center','right','right'];
 
       // 줄바꿈에 따른 동적 높이 계산
       const padding = 12; // 6 * SC
