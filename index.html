@@ -657,6 +657,10 @@ async function processCombined() {
     // 동적 파일명 생성 (오늘날짜_총금액)
     let grandTotalFilename = 0;
     invoiceData.forEach(inv => grandTotalFilename += Number(inv.total || 0));
+    
+    // JS 부동소수점 오류 해결 (소수점 2자리까지만 남기고 잘라냄)
+    grandTotalFilename = parseFloat(grandTotalFilename.toFixed(2));
+    
     const today = new Date();
     const yyyy = today.getFullYear();
     const mm = String(today.getMonth() + 1).padStart(2, '0');
