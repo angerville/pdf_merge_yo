@@ -180,17 +180,9 @@
   table.inv-table td.num { font-family: 'Space Mono', monospace; text-align: right; }
   .total-row td { font-weight: 700; color: var(--accent2); background: rgba(247,162,111,0.06) !important; }
   .total-row td.num { font-size: 15px; }
-  .file-badge {
-    display: inline-block; font-size: 10px; padding: 1px 7px; border-radius: 99px;
-    background: rgba(124,111,247,0.15); color: var(--accent);
-    font-family: 'Space Mono', monospace; margin-left: 6px; vertical-align: middle;
-  }
   .currency-tag {
     font-size: 10px; color: var(--text-muted); margin-left: 4px;
     font-family: 'Space Mono', monospace;
-  }
-  .api-key-row {
-    display: flex; gap: 10px; align-items: center; margin-bottom: 16px;
   }
   .api-key-input {
     flex: 1; background: var(--surface2); border: 1px solid var(--border);
@@ -198,10 +190,6 @@
     font-size: 13px; font-family: 'Space Mono', monospace; outline: none;
   }
   .api-key-input:focus { border-color: var(--accent); }
-  .api-key-input::placeholder { color: var(--text-muted); }
-  .api-notice {
-    font-size: 11px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.6;
-  }
   .analyzing-spinner {
     display: inline-block; animation: spin 1s linear infinite; margin-right: 6px;
   }
@@ -255,7 +243,7 @@
       </div>
     </div>
     <div class="option-row">
-      <div><div class="option-label">화표 분석 요약표</div><div class="option-desc">Claude AI로 물품명 인식 및 한글 번역 후 첫 페이지에 삽입</div></div>
+      <div><div class="option-label">화표 분석 요약표</div><div class="option-desc">AI로 물품명 인식 및 한글 번역 후 첫 페이지에 삽입</div></div>
       <div class="toggle-group">
         <button class="toggle-btn active" data-inv="on" onclick="setInvMode('on')">포함</button>
         <button class="toggle-btn" data-inv="off" onclick="setInvMode('off')">제외</button>
@@ -263,13 +251,11 @@
     </div>
   </div>
 
-  <!-- Gemini API (키 숨김 — Apps Script 프록시 사용) -->
   <div class="invoice-panel" id="apiPanel">
     <h3>✨ Gemini AI 분석</h3>
     <p style="font-size:13px; color:var(--success);">✅ Google Gemini 분석 준비 완료. 아래 버튼을 눌러 화표를 분석하세요.</p>
   </div>
 
-  <!-- 분석 결과 테이블 -->
   <div class="invoice-panel" id="resultPanel">
     <h3>📋 화표 분석 결과 <span id="analyzingSpinner" style="display:none"><span class="analyzing-spinner">⟳</span> 분석 중...</span></h3>
     <div class="inv-table-wrap">
@@ -282,7 +268,6 @@
             <th>수량</th>
             <th style="text-align:right">단가</th>
             <th style="text-align:right">금액</th>
-            <th>파일</th>
           </tr>
         </thead>
         <tbody id="invBody"></tbody>
@@ -316,7 +301,7 @@ let printMode = 'fit';
 let paperSize = 'A4';
 let invMode = 'on';
 let dragSrcIdx = null;
-let invoiceData = []; // [{fileName, items:[{original,korean,qty,unitPrice,amount,currency}]}]
+let invoiceData = []; 
 
 const A4 = { width: 595.28, height: 841.89 };
 const LETTER = { width: 612, height: 792 };
@@ -441,7 +426,6 @@ const PROMPT = `다음은 화표(영수증/invoice/거래명세서)의 이미지
       const file = files[fi];
       setStatus(`📄 분석 중: ${file.name} (${fi+1}/${files.length})`, '');
 
-      // PDF 페이지를 이미지로 렌더링
       const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
       const pageImages = [];
       const pagesToScan = Math.min(file.pages, 3);
@@ -455,13 +439,11 @@ const PROMPT = `다음은 화표(영수증/invoice/거래명세서)의 이미지
         pageImages.push(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
       }
 
-      // Gemini API 형식으로 요청 구성
       const parts = [{ text: PROMPT }];
       pageImages.forEach(b64 => {
         parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
       });
 
-      // Apps Script 프록시를 통해 Gemini 호출
       const res = await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
@@ -522,21 +504,19 @@ function renderInvoiceTable() {
         <td class="item-qty">${item.qty ?? 1}</td>
         <td class="num">${item.unitPrice != null ? formatNum(item.unitPrice) : '-'}</td>
         <td class="num">${formatNum(amt)} <span class="currency-tag">${cur}</span></td>
-        <td><span class="file-badge">${escHtml(inv.fileName)}</span></td>
       `;
       tbody.appendChild(tr);
     });
 
-    // 파일별 소계/세금/합계 표시
     if (inv.items && inv.items.length > 0) {
       if (inv.subtotal != null) {
         const sr = document.createElement('tr');
-        sr.innerHTML = `<td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">소계 (${escHtml(inv.fileName)})</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.subtotal)} <span class="currency-tag">${cur}</span></td><td></td>`;
+        sr.innerHTML = `<td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">소계 (${escHtml(inv.fileName)})</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.subtotal)} <span class="currency-tag">${cur}</span></td>`;
         tbody.appendChild(sr);
       }
       if (inv.tax != null) {
         const tr2 = document.createElement('tr');
-        tr2.innerHTML = `<td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">세금</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.tax)} <span class="currency-tag">${cur}</span></td><td></td>`;
+        tr2.innerHTML = `<td colspan="5" style="text-align:right;color:var(--text-muted);font-size:12px">세금</td><td class="num" style="color:var(--text-muted);font-size:12px">${formatNum(inv.tax)} <span class="currency-tag">${cur}</span></td>`;
         tbody.appendChild(tr2);
       }
     }
@@ -544,13 +524,11 @@ function renderInvoiceTable() {
     if (inv.total != null) grandTotal += Number(inv.total);
   });
 
-  // 총합계 행
   const tfr = document.createElement('tr');
   tfr.className = 'total-row';
   tfr.innerHTML = `
     <td colspan="5" style="text-align:right;font-size:14px">📦 전체 총 합계</td>
     <td class="num" style="font-size:16px">${formatNum(grandTotal)} <span class="currency-tag" style="font-size:12px">${grandCurrency}</span></td>
-    <td></td>
   `;
   tfoot.appendChild(tfr);
 }
@@ -580,7 +558,6 @@ async function processCombined() {
 
     const finalDoc = await PDFLib.PDFDocument.create();
 
-    // ── 화표 요약 첫 페이지 ──
     if (invMode === 'on' && invoiceData.length > 0) {
       setStatus('화표 요약 페이지 생성 중...', '');
       await insertSummaryPage(finalDoc, paper);
@@ -675,7 +652,18 @@ async function processCombined() {
     const blob = new Blob([pdfBytes], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = 'merged_with_summary.pdf'; a.click();
+    a.href = url;
+
+    // 동적 파일명 생성 (오늘날짜_총금액)
+    let grandTotalFilename = 0;
+    invoiceData.forEach(inv => grandTotalFilename += Number(inv.total || 0));
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm = String(today.getMonth() + 1).padStart(2, '0');
+    const dd = String(today.getDate()).padStart(2, '0');
+    a.download = `${yyyy}-${mm}-${dd}_${grandTotalFilename}.pdf`;
+    
+    a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
 
     setStatus(`✅ 다운로드 완료! 총 ${totalPages}페이지 고화질 변환 성공`, 'success');
@@ -705,7 +693,6 @@ async function insertSummaryPage(finalDoc, paper) {
   const pad = 40 * SC;
   let y = pad;
 
-  // 제목 (사용자 입력값 반영)
   const customTitle = document.getElementById('summaryTitle').value.trim() || '화표 품목 요약표';
   ctx.fillStyle = '#1a1a2e';
   ctx.font = `bold ${18*SC}px "Noto Sans KR", sans-serif`;
@@ -718,23 +705,21 @@ async function insertSummaryPage(finalDoc, paper) {
   ctx.fillText(`생성일시: ${now}`, pad, y);
   y += 20 * SC;
 
-  // 구분선
   ctx.strokeStyle = '#7c6ff7';
   ctx.lineWidth = 2 * SC;
   ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(PW - pad, y); ctx.stroke();
   y += 16 * SC;
 
-  // 컬럼 너비 (비율)
+  // 컬럼 너비 (6개 열로 변경 및 물품명 비율 확대)
   const usable = PW - pad * 2;
-  const cols = [0.05, 0.22, 0.22, 0.07, 0.14, 0.14, 0.16];
+  const cols = [0.05, 0.30, 0.30, 0.07, 0.14, 0.14];
   const colX = [];
   let cx = pad;
   cols.forEach(r => { colX.push(cx); cx += usable * r; });
 
-  const headers = ['#', '물품명 (원문)', '물품명 (한글)', '수량', '단가', '금액', '파일명'];
+  const headers = ['#', '물품명 (원문)', '물품명 (한글)', '수량', '단가', '금액'];
   const rowH = 22 * SC;
 
-  // 헤더 배경
   ctx.fillStyle = '#f0eeff';
   ctx.fillRect(pad, y, usable, rowH);
 
@@ -757,11 +742,7 @@ async function insertSummaryPage(finalDoc, paper) {
     if (!grandCur && cur) grandCur = cur;
 
     (inv.items || []).forEach((item, idx) => {
-      if (y > maxY) return; // 페이지 초과 방지 (추후 다중 페이지 확장 가능)
-      ctx.fillStyle = idx % 2 === 0 ? '#fafafa' : '#ffffff';
-      ctx.fillRect(pad, y, usable, rowH);
-
-      ctx.fillStyle = '#1a1a2e';
+      if (y > maxY) return; // 페이지 초과 방지 
       ctx.font = `${8*SC}px "Noto Sans KR", sans-serif`;
       const amt = Number(item.amount) || 0;
       const cells = [
@@ -770,12 +751,25 @@ async function insertSummaryPage(finalDoc, paper) {
         item.korean || '-',
         String(item.qty ?? 1),
         item.unitPrice != null ? formatNum(item.unitPrice) : '-',
-        formatNum(amt) + (cur ? ' ' + cur : ''),
-        inv.fileName.length > 15 ? inv.fileName.substring(0, 14) + '…' : inv.fileName,
+        formatNum(amt) + (cur ? ' ' + cur : '')
       ];
-      const aligns = ['left','left','left','left','right','right','left'];
-      cells.forEach((c, i) => drawCellText(ctx, c, colX[i], y, usable * cols[i], rowH, aligns[i]));
-      y += rowH;
+      const aligns = ['left','left','left','left','right','right'];
+
+      // 줄바꿈에 따른 동적 높이 계산
+      const padding = 12; // 6 * SC
+      const cellLines = cells.map((text, i) => getLines(ctx, text, usable * cols[i] - padding));
+      const maxLines = Math.max(...cellLines.map(lines => lines.length));
+      const lineHeight = 8 * SC * 1.5;
+      const currentRowH = Math.max(rowH, maxLines * lineHeight + 12 * SC);
+
+      if (y + currentRowH > maxY) return; // 높이 초과 방지
+
+      ctx.fillStyle = idx % 2 === 0 ? '#fafafa' : '#ffffff';
+      ctx.fillRect(pad, y, usable, currentRowH);
+
+      ctx.fillStyle = '#1a1a2e';
+      cells.forEach((c, i) => drawCellText(ctx, c, colX[i], y, usable * cols[i], currentRowH, aligns[i]));
+      y += currentRowH;
     });
 
     // 파일별 합계 행
@@ -785,15 +779,16 @@ async function insertSummaryPage(finalDoc, paper) {
         ctx.fillRect(pad, y, usable, rowH);
         ctx.fillStyle = '#5a50d0';
         ctx.font = `bold ${8*SC}px "Noto Sans KR", sans-serif`;
-        drawCellText(ctx, `소계: ${inv.fileName}`, colX[0], y, usable*0.7, rowH, 'left');
-        drawCellText(ctx, formatNum(inv.total) + (cur ? ' '+cur : ''), colX[5], y, usable*cols[5], rowH, 'right');
+        // 셀을 넓게 사용하여 텍스트 잘림 방지
+        drawCellText(ctx, `소계: ${inv.fileName}`, colX[0], y, usable * (cols[0]+cols[1]+cols[2]), rowH, 'left');
+        drawCellText(ctx, formatNum(inv.total) + (cur ? ' '+cur : ''), colX[3], y, usable * (cols[3]+cols[4]+cols[5]), rowH, 'right');
         y += rowH;
       }
       grandTotal += Number(inv.total);
     }
   });
 
-  // 구분선
+  // 구분선 및 전체 합계
   if (y <= maxY) {
     y += 8 * SC;
     ctx.strokeStyle = '#f7a26f';
@@ -801,17 +796,18 @@ async function insertSummaryPage(finalDoc, paper) {
     ctx.beginPath(); ctx.moveTo(pad, y); ctx.lineTo(PW - pad, y); ctx.stroke();
     y += 12 * SC;
 
-    // 총 합계
     ctx.fillStyle = '#fff5ee';
     ctx.fillRect(pad, y, usable, 30 * SC);
+    
     ctx.fillStyle = '#c0541a';
     ctx.font = `bold ${11*SC}px "Noto Sans KR", sans-serif`;
-    drawCellText(ctx, '📦 전체 총 합계', colX[0], y, usable*0.7, 30*SC, 'left');
+    drawCellText(ctx, '📦 전체 총 합계', colX[0], y, usable * (cols[0]+cols[1]+cols[2]), 30*SC, 'left');
+    
     ctx.font = `bold ${13*SC}px "Space Mono", monospace`;
-    drawCellText(ctx, formatNum(grandTotal) + (grandCur ? ' ' + grandCur : ''), colX[5], y, usable*cols[5], 30*SC, 'right');
+    drawCellText(ctx, formatNum(grandTotal) + (grandCur ? ' ' + grandCur : ''), colX[3], y, usable * (cols[3]+cols[4]+cols[5]), 30*SC, 'right');
   }
 
-  // PDF에 삽입 (맨 첫 페이지)
+  // PDF에 삽입
   const jpegB64 = canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
   const imgBytes = Uint8Array.from(atob(jpegB64), c => c.charCodeAt(0));
   const img = await finalDoc.embedJpg(imgBytes);
@@ -819,16 +815,34 @@ async function insertSummaryPage(finalDoc, paper) {
   summaryPage.drawImage(img, { x: 0, y: 0, width: paper.width, height: paper.height });
 }
 
+// 자동 줄바꿈을 지원하는 향상된 텍스트 그리기 함수
 function drawCellText(ctx, text, x, y, w, h, align) {
-  const padding = 6 * 2; // SC=2
+  const padding = 12; // 좌우 여백 (6 * SC)
   ctx.save();
   ctx.beginPath();
-  ctx.rect(x + padding/2, y, w - padding, h);
+  ctx.rect(x, y, w, h);
   ctx.clip();
+
   const textX = align === 'right' ? x + w - padding/2 : x + padding/2;
   ctx.textAlign = align === 'right' ? 'right' : 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, textX, y + h / 2);
+
+  const maxWidth = w - padding;
+  const lines = getLines(ctx, String(text), maxWidth);
+  
+  // 현재 컨텍스트의 폰트 크기 추출 후 줄간격 계산
+  const match = ctx.font.match(/(\d+(?:\.\d+)?)px/);
+  const fontSize = match ? parseFloat(match[1]) : 16;
+  const lineHeight = fontSize * 1.5;
+
+  const totalTextHeight = lines.length * lineHeight;
+  let startY = y + (h - totalTextHeight) / 2 + lineHeight / 2;
+
+  lines.forEach((line) => {
+    ctx.fillText(line, textX, startY);
+    startY += lineHeight;
+  });
+
   ctx.restore();
 
   // 셀 경계선
@@ -838,6 +852,27 @@ function drawCellText(ctx, text, x, y, w, h, align) {
   ctx.moveTo(x, y + h);
   ctx.lineTo(x + w, y + h);
   ctx.stroke();
+}
+
+// 텍스트 줄바꿈 계산 함수
+function getLines(ctx, text, maxWidth) {
+  if (!text) return [''];
+  const chars = String(text).split('');
+  let lines = [];
+  let currentLine = '';
+  
+  for (let i = 0; i < chars.length; i++) {
+    const testLine = currentLine + chars[i];
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > maxWidth && currentLine !== '') {
+      lines.push(currentLine);
+      currentLine = chars[i];
+    } else {
+      currentLine = testLine;
+    }
+  }
+  if (currentLine) lines.push(currentLine);
+  return lines;
 }
 
 function dataURLtoBytes(dataURL) {
