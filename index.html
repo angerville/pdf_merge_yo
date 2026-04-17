@@ -444,6 +444,7 @@ const PROMPT = `다음은 화표(영수증/invoice/거래명세서)의 이미지
         parts.push({ inlineData: { mimeType: 'image/jpeg', data: b64 } });
       });
 
+      // (기존 코드)
       const res = await fetch(APPS_SCRIPT_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain' },
@@ -466,6 +467,12 @@ const PROMPT = `다음은 화표(영수증/invoice/거래명세서)의 이미지
 
       invoiceData.push({ fileName: file.name, ...parsed });
       showProgress(((fi + 1) / files.length) * 100);
+
+      // ▼▼▼ 여기에 이 3줄을 추가해 주세요! ▼▼▼
+      if (fi < files.length - 1) {
+        await new Promise(resolve => setTimeout(resolve, 4000)); // 다음 파일 분석 전 4초 대기 (무료 API 제한 방지)
+      }
+      // ▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲▲
     }
 
     renderInvoiceTable();
