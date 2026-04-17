@@ -134,8 +134,8 @@ const A4 = { width: 595.28, height: 841.89 };
 document.getElementById('fileInput').addEventListener('change', e => addFiles(e.target.files));
 const zone = document.getElementById('uploadZone');
 zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
-zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'); });
-zone.addEventListener('drop', e => {
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'));
+  zone.addEventListener('drop', e => {
   e.preventDefault(); zone.classList.remove('drag-over');
   const pdfs = [...e.dataTransfer.files].filter(f => f.type === 'application/pdf');
   addFiles(pdfs);
