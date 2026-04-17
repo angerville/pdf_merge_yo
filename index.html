@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>영수증 정산 요약본 & 고화질 PDF 변환기 (Vision API)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf-lib/1.17.1/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://unpkg.com/@pdf-lib/fontkit@0.0.4"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Space+Mono:wght@400;700&display=swap');
+
+  :root {
+    --bg: #0f0f11; --surface: #1a1a1f; --surface2: #242429; --border: #2e2e36;
+    --accent: #7c6ff7; --accent2: #f7a26f; --text: #e8e8f0; --text-muted: #7a7a90;
+    --success: #4fd1a5; --danger: #f76f7a; --radius: 12px;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Noto Sans KR', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 40px 20px; }
+  .container { max-width: 820px; margin: 0 auto; }
+  
+  header { text-align: center; margin-bottom: 48px; }
+  header h1 { font-family: 'Space Mono', monospace; font-size: 28px; font-weight: 700; color: var(--accent); letter-spacing: -0.5px; margin-bottom: 8px; }
+  header p { color: var(--text-muted); font-size: 14px; font-weight: 300; }
+
+  .steps { display: flex; gap: 8px; margin-bottom: 32px; justify-content: center; }
+  .step { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); }
+  .step-num { width: 24px; height: 24px; border-radius: 50%; background: var(--surface2); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; font-family: 'Space Mono', monospace; font-size: 11px; transition: all 0.3s; }
+  .step.active .step-num { background: var(--accent); border-color: var(--accent); color: white; }
+  .step-line { width: 32px; height: 1px; background: var(--border); }
+
+  .upload-zone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 48px 32px; text-align: center; cursor: pointer; transition: all 0.3s; background: var(--surface); position: relative; }
+  .upload-zone:hover, .upload-zone.drag-over { border-color: var(--accent); background: rgba(124, 111, 247, 0.05); }
+  .upload-zone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
+  .upload-icon { font-size: 48px; margin-bottom: 16px; display: block; }
+  .upload-zone h2 { font-size: 18px; font-weight: 500; margin-bottom: 8px; }
+  .upload-zone p { font-size: 13px; color: var(--text-muted); }
+
+  .file-list { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
+  .file-item { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; display: flex; align-items: center; gap: 12px; cursor: grab; transition: all 0.2s; user-select: none; }
+  .file-item:hover { border-color: var(--accent); }
+  .file-icon { font-size: 24px; flex-shrink: 0; }
+  .file-info { flex: 1; min-width: 0; }
+  .file-name { font-size: 14px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .file-meta { font-size: 11px; color: var(--text-muted); margin-top: 2px; font-family: 'Space Mono', monospace; }
+  .remove-btn { background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 18px; padding: 4px 8px; border-radius: 6px; transition: all 0.2s; line-height: 1; }
+  .remove-btn:hover { background: rgba(247, 111, 122, 0.2); color: var(--danger); }
+  .badge { display: inline-block; background: rgba(124, 111, 247, 0.2); color: var(--accent); border-radius: 99px; padding: 2px 10px; font-size: 11px; font-family: 'Space Mono', monospace; margin-left: 8px; }
+
+  .options-panel { margin-top: 32px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; }
+  .options-panel h3 { font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--text-muted); margin-bottom: 20px; font-family: 'Space Mono', monospace; }
+  .option-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid var(--border); }
+  .option-row:last-child { border-bottom: none; }
+  .option-label { font-size: 14px; font-weight: 500; }
+  .option-desc { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .toggle-group { display: flex; background: var(--surface2); border-radius: 8px; padding: 3px; gap: 2px; }
+  .toggle-btn { padding: 6px 14px; border: none; border-radius: 6px; background: transparent; color: var(--text-muted); font-size: 13px; cursor: pointer; transition: all 0.2s; font-family: 'Noto Sans KR', sans-serif; }
+  .toggle-btn.active { background: var(--accent); color: white; }
+
+  .actions { margin-top: 32px; display: grid; grid-template-columns: 1fr; gap: 12px; }
+  .btn { padding: 16px 24px; border: none; border-radius: var(--radius); font-size: 15px; font-weight: 500; cursor: pointer; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 8px; font-family: 'Noto Sans KR', sans-serif; }
+  .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-color { background: linear-gradient(135deg, var(--accent), #a78bfa); color: white; }
+  .btn-color:hover:not(:disabled) { transform: translateY(-1px); box-shadow: 0 8px 24px rgba(124, 111, 247, 0.35); }
+
+  .progress-bar { margin-top: 20px; background: var(--surface2); border-radius: 99px; height: 6px; overflow: hidden; display: none; }
+  .progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); border-radius: 99px; transition: width 0.4s ease; width: 0%; }
+  .status-msg { text-align: center; font-size: 13px; color: var(--text-muted); margin-top: 12px; min-height: 20px; white-space: pre-line; }
+  .status-msg.success { color: var(--success); }
+  .status-msg.error { color: var(--danger); }
+</style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <h1>영수증 정산 요약본 & 고화질 변환기 (Pro)</h1>
+    <p>첫 장에 표를 자동 생성하고, 화표를 고화질로 병합합니다</p>
+  </header>
+
+  <div class="steps">
+    <div class="step active" id="step1"><span class="step-num">1</span><span>업로드</span></div><div class="step-line"></div>
+    <div class="step" id="step2"><span class="step-num">2</span><span>정렬</span></div><div class="step-line"></div>
+    <div class="step" id="step3"><span class="step-num">3</span><span>표 생성 & 병합</span></div>
+  </div>
+
+  <div class="upload-zone" id="uploadZone">
+    <input type="file" accept=".pdf" multiple id="fileInput">
+    <span class="upload-icon">📂</span>
+    <h2>PDF 파일을 드래그하거나 클릭하여 업로드</h2>
+    <p>순서 변경 가능 • 업로드한 '파일 이름'이 요약표의 물품명으로 사용됩니다</p>
+  </div>
+
+  <div class="file-list" id="fileList"></div>
+
+  <div class="options-panel" id="optionsPanel" style="display:none">
+    <h3>변환 옵션</h3>
+    <div class="option-row">
+      <div>
+        <div class="option-label">인쇄 방향</div>
+        <div class="option-desc">가로 페이지 처리 방식</div>
+      </div>
+      <div class="toggle-group">
+        <button class="toggle-btn active" data-mode="fit" onclick="setMode('fit')">세로 맞춤 ↕</button>
+        <button class="toggle-btn" data-mode="rotate" onclick="setMode('rotate')">90° 회전 ↻</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="actions" id="actions" style="display:none">
+    <button class="btn btn-color" id="btnMerge" onclick="processCombined()">
+      <span class="btn-icon">⚡</span>
+      요약표 생성 및 고화질 병합 다운로드
+    </button>
+  </div>
+
+  <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+  <div class="status-msg" id="statusMsg"></div>
+</div>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+// 선생님께서 발급해주신 구글 Apps Script URL입니다.
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbzprx7U8MoPE3xEgU8nL0QRtIyZYD_tQJiH8t6McDGnTqnbGo_4w0LJjLlmsE9WWMFB/exec';
+
+let files = [];
+let printMode = 'fit';
+let dragSrcIdx = null;
+
+const A4 = { width: 595.28, height: 841.89 };
+
+document.getElementById('fileInput').addEventListener('change', e => addFiles(e.target.files));
+const zone = document.getElementById('uploadZone');
+zone.addEventListener('dragover', e => { e.preventDefault(); zone.classList.add('drag-over'); });
+zone.addEventListener('dragleave', () => zone.classList.remove('drag-over'); });
+zone.addEventListener('drop', e => {
+  e.preventDefault(); zone.classList.remove('drag-over');
+  const pdfs = [...e.dataTransfer.files].filter(f => f.type === 'application/pdf');
+  addFiles(pdfs);
+});
+
+async function addFiles(newFiles) {
+  for (const f of newFiles) {
+    if (f.type !== 'application/pdf') continue;
+    const buf = await f.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf.slice(0) }).promise;
+    files.push({ name: f.name, size: f.size, buf, pages: pdf.numPages });
+  }
+  renderList();
+}
+
+function removeFile(i) { files.splice(i, 1); renderList(); }
+
+function renderList() {
+  const list = document.getElementById('fileList');
+  const opts = document.getElementById('optionsPanel');
+  const acts = document.getElementById('actions');
+
+  if (files.length === 0) {
+    list.innerHTML = ''; opts.style.display = 'none'; acts.style.display = 'none';
+    setStep(1); return;
+  }
+  opts.style.display = 'block'; acts.style.display = 'grid';
+  setStep(files.length > 1 ? 2 : 3);
+
+  list.innerHTML = files.map((f, i) => `
+    <div class="file-item" draggable="true" ondragstart="dragStart(${i})" ondragover="dragOver(event,${i})" ondrop="dragDrop(event,${i})" ondragend="dragEnd()" id="fi-${i}">
+      <span class="drag-handle">⠿</span><span class="file-icon">📄</span>
+      <div class="file-info">
+        <div class="file-name">${escHtml(f.name)}</div>
+        <div class="file-meta">${f.pages}페이지 · ${(f.size/1024).toFixed(1)} KB</div>
+      </div>
+      <span class="badge">${i+1}</span>
+      <button class="remove-btn" onclick="removeFile(${i})">×</button>
+    </div>
+  `).join('');
+}
+
+function escHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function dragStart(i) { dragSrcIdx = i; document.getElementById(`fi-${i}`).classList.add('dragging'); }
+function dragOver(e, i) { e.preventDefault(); }
+function dragDrop(e, i) { e.preventDefault(); if (dragSrcIdx === null || dragSrcIdx === i) return; const moved = files.splice(dragSrcIdx, 1)[0]; files.splice(i, 0, moved); renderList(); }
+function dragEnd() { dragSrcIdx = null; document.querySelectorAll('.file-item').forEach(el=>el.classList.remove('dragging')); }
+function setMode(m) { printMode = m; document.querySelectorAll('[data-mode]').forEach(b => b.classList.toggle('active', b.dataset.mode === m)); }
+function setStep(n) { [1,2,3].forEach(i => document.getElementById(`step${i}`).classList.toggle('active', i <= n)); }
+
+function getTodayDateString() {
+  const today = new Date();
+  const yyyy = today.getFullYear();
+  const mm = String(today.getMonth() + 1).padStart(2, '0');
+  const dd = String(today.getDate()).padStart(2, '0');
+  return `${yyyy}${mm}${dd}`;
+}
+
+async function processCombined() {
+  if (files.length === 0) return;
+  setStep(3);
+  const btnMerge = document.getElementById('btnMerge');
+  btnMerge.disabled = true;
+  showProgress(5);
+
+  let totalInvoiceAmount = 0;
+  let summaryData = [];
+
+  try {
+    setStatus('⚡ 구글 클라우드 서버에서 금액을 판독 중입니다...', '');
+    
+    // ── 1단계: Google Vision API를 활용한 빠르고 정확한 OCR 인식 ──
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const itemName = file.name.replace(/\.pdf$/i, ''); 
+      let extractedAmount = 0;
+
+      const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
+      const pdfPage = await pdfJs.getPage(1);
+      
+      // Vision API 전송을 위해 이미지를 적당한 해상도로 렌더링
+      const vp = pdfPage.getViewport({ scale: 1.5 });
+      const canvas = document.createElement('canvas');
+      canvas.width = vp.width; canvas.height = vp.height;
+      const ctx = canvas.getContext('2d');
+      await pdfPage.render({ canvasContext: ctx, viewport: vp }).promise;
+
+      // Base64 포맷으로 변환 후 GAS 서버로 전송
+      const base64Data = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+
+      // CORS 문제를 우회하기 위해 text/plain 속성으로 전송합니다
+      const response = await fetch(GAS_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ image: base64Data })
+      });
+      
+      const result = await response.json();
+      let recognizedText = "";
+      
+      if (result.responses && result.responses[0] && result.responses[0].textAnnotations) {
+        recognizedText = result.responses[0].textAnnotations[0].description;
+      }
+
+      // 공백을 모두 제거하여 Vision API가 띄어쓰기를 넣었을 경우를 완벽 방어합니다.
+      const cleanText = recognizedText.replace(/\s+/g, '');
+      const match = cleanText.match(/[小少]写.*?([0-9]+\.[0-9]{2})/);
+      
+      if (match && match[1]) {
+        extractedAmount = parseFloat(match[1]);
+        totalInvoiceAmount += extractedAmount;
+      } else {
+        const userInput = prompt(`⚠️ '${itemName}' 영수증의 금액을 완벽히 인식하지 못했습니다.\n해당 영수증의 금액을 직접 입력해 주세요 (숫자만 입력):`, "0.00");
+        extractedAmount = parseFloat(userInput) || 0;
+        totalInvoiceAmount += extractedAmount;
+      }
+
+      summaryData.push({ name: itemName, amount: extractedAmount.toFixed(2) });
+      showProgress(10 + ((i + 1) / files.length) * 20);
+    }
+
+    // ── 2단계: PDF 생성 및 한글 폰트 로드 ──
+    setStatus('🎨 정산 요약표 페이지 생성 중...', '');
+    const finalDoc = await PDFLib.PDFDocument.create();
+    
+    finalDoc.registerFontkit(fontkit);
+    const fontUrl = 'https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.8/packages/pretendard/dist/public/static/Pretendard-Regular.otf';
+    const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
+    const customFont = await finalDoc.embedFont(fontBytes);
+
+    // ── 3단계: 첫 번째 페이지(요약표) 그리기 ──
+    const summaryPage = finalDoc.addPage([A4.width, A4.height]);
+    const margin = 50;
+    let currentY = A4.height - 80;
+
+    summaryPage.drawText("영수증 정산 요약본", { x: margin, y: currentY, font: customFont, size: 24, color: PDFLib.rgb(0, 0, 0) });
+    currentY -= 40;
+
+    const col1X = margin + 10;
+    const col2X = margin + 350;
+    
+    summaryPage.drawLine({ start: { x: margin, y: currentY }, end: { x: A4.width - margin, y: currentY }, thickness: 2 });
+    currentY -= 25;
+    summaryPage.drawText("물품명", { x: col1X, y: currentY + 5, font: customFont, size: 14 });
+    summaryPage.drawText("금액 (¥)", { x: col2X, y: currentY + 5, font: customFont, size: 14 });
+    currentY -= 10;
+    summaryPage.drawLine({ start: { x: margin, y: currentY }, end: { x: A4.width - margin, y: currentY }, thickness: 1 });
+    
+    currentY -= 25;
+    for (const item of summaryData) {
+      summaryPage.drawText(item.name, { x: col1X, y: currentY + 5, font: customFont, size: 12 });
+      summaryPage.drawText(`¥ ${item.amount}`, { x: col2X, y: currentY + 5, font: customFont, size: 12 });
+      currentY -= 10;
+      summaryPage.drawLine({ start: { x: margin, y: currentY }, end: { x: A4.width - margin, y: currentY }, thickness: 0.5, color: PDFLib.rgb(0.8, 0.8, 0.8) });
+      currentY -= 25;
+    }
+
+    summaryPage.drawLine({ start: { x: margin, y: currentY + 15 }, end: { x: A4.width - margin, y: currentY + 15 }, thickness: 2 });
+    currentY -= 10;
+    summaryPage.drawText("총 합계", { x: col1X, y: currentY + 5, font: customFont, size: 16 });
+    summaryPage.drawText(`¥ ${totalInvoiceAmount.toFixed(2)}`, { x: col2X, y: currentY + 5, font: customFont, size: 16, color: PDFLib.rgb(0.8, 0.1, 0.1) });
+    currentY -= 10;
+    summaryPage.drawLine({ start: { x: margin, y: currentY }, end: { x: A4.width - margin, y: currentY }, thickness: 2 });
+
+    const downloadFileName = `${getTodayDateString()}_${totalInvoiceAmount.toFixed(2)}.pdf`;
+
+    // ── 4단계: 기존 영수증 고화질 병합 ──
+    setStatus('🎨 원본 화표 고화질 병합 중...', '');
+    const paper = A4;
+    const totalPagesCount = files.reduce((s, f) => s + f.pages, 0) * 2;
+    let done = 0;
+
+    for (const file of files) {
+      const srcDoc = await PDFLib.PDFDocument.load(file.buf.slice(0));
+      for (let p = 0; p < srcDoc.getPageCount(); p++) {
+        const [embedded] = await finalDoc.embedPdf(srcDoc, [p]);
+        const { width: origW, height: origH } = embedded;
+        const isLandscape = origW > origH;
+        const newPage = finalDoc.addPage([paper.width, paper.height]);
+        let x, y, w, h, angle = 0;
+
+        if (!isLandscape) {
+          const s = Math.min(paper.width / origW, paper.height / origH);
+          w = origW * s; h = origH * s;
+          x = (paper.width - w) / 2; y = (paper.height - h) / 2;
+        } else if (printMode === 'rotate') {
+          const s = Math.min(paper.width / origH, paper.height / origW);
+          w = origW * s; h = origH * s;
+          x = (paper.width - h) / 2; y = (paper.height - w) / 2;
+          angle = 90;
+        } else {
+          const s = Math.min(paper.width / origW, paper.height / origH);
+          w = origW * s; h = origH * s;
+          x = (paper.width - w) / 2; y = (paper.height - h) / 2;
+        }
+
+        if (angle === 90) newPage.drawPage(embedded, { x: x + h, y: y, width: w, height: h, rotate: PDFLib.degrees(90) });
+        else newPage.drawPage(embedded, { x, y, width: w, height: h });
+        
+        done++;
+        showProgress(30 + (done / totalPagesCount) * 70);
+      }
+    }
+
+    const SCALE = 5; 
+    for (const file of files) {
+      const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
+      for (let p = 0; p < file.pages; p++) {
+        const pdfPage = await pdfJs.getPage(p + 1);
+        const vp = pdfPage.getViewport({ scale: SCALE });
+        const srcCanvas = document.createElement('canvas');
+        srcCanvas.width = vp.width; srcCanvas.height = vp.height;
+        const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
+        await pdfPage.render({ canvasContext: srcCtx, viewport: vp }).promise;
+
+        const imgData = srcCtx.getImageData(0, 0, vp.width, vp.height);
+        const d = imgData.data;
+        for (let i = 0; i < d.length; i += 4) {
+          const g = Math.round(0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2]);
+          d[i] = d[i+1] = d[i+2] = g;
+        }
+        srcCtx.putImageData(imgData, 0, 0);
+
+        const outCanvas = document.createElement('canvas');
+        outCanvas.width = paper.width * SCALE; outCanvas.height = paper.height * SCALE;
+        const octx = outCanvas.getContext('2d');
+        octx.fillStyle = '#ffffff'; octx.fillRect(0, 0, outCanvas.width, outCanvas.height);
+
+        let drawX, drawY, drawW, drawH, rotation = 0;
+        const origW = vp.width / SCALE; const origH = vp.height / SCALE;
+        const isLandscape = origW > origH;
+
+        if (!isLandscape) {
+          const s = Math.min(paper.width / origW, paper.height / origH);
+          drawW = origW * s; drawH = origH * s;
+          drawX = (paper.width - drawW) / 2; drawY = (paper.height - drawH) / 2;
+        } else if (printMode === 'rotate') {
+          const s = Math.min(paper.width / origH, paper.height / origW);
+          drawW = origH * s; drawH = origW * s;
+          drawX = (paper.width - drawW) / 2; drawY = (paper.height - drawH) / 2;
+          rotation = 90;
+        } else {
+          const s = Math.min(paper.width / origW, paper.height / origH);
+          drawW = origW * s; drawH = origH * s;
+          drawX = (paper.width - drawW) / 2; drawY = (paper.height - drawH) / 2;
+        }
+
+        if (rotation === 90) {
+          octx.save();
+          octx.translate((drawX + drawW / 2) * SCALE, (drawY + drawH / 2) * SCALE);
+          octx.rotate(-Math.PI / 2);
+          octx.drawImage(srcCanvas, -drawH * SCALE / 2, -drawW * SCALE / 2, drawH * SCALE, drawW * SCALE);
+          octx.restore();
+        } else {
+          octx.drawImage(srcCanvas, drawX * SCALE, drawY * SCALE, drawW * SCALE, drawH * SCALE);
+        }
+
+        const base64Data = outCanvas.toDataURL('image/jpeg', 0.95);
+        const imgBytes = dataURLtoBytes(base64Data);
+        const img = await finalDoc.embedJpg(imgBytes);
+        const newPage = finalDoc.addPage([paper.width, paper.height]);
+        newPage.drawImage(img, { x: 0, y: 0, width: paper.width, height: paper.height });
+
+        done++;
+        showProgress(30 + (done / totalPagesCount) * 70);
+      }
+    }
+
+    const pdfBytes = await finalDoc.save();
+    const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = downloadFileName; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+
+    setStatus(`✅ 완벽하게 처리되었습니다!\n파일명: ${downloadFileName}`, 'success');
+    showProgress(100);
+
+  } catch (err) {
+    console.error(err);
+    setStatus('❌ 서버 통신 또는 변환 오류: ' + err.message, 'error');
+  } finally {
+    btnMerge.disabled = false;
+  }
+}
+
+function dataURLtoBytes(dataURL) {
+  const b64 = dataURL.split(',')[1];
+  const bin = atob(b64);
+  const arr = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+  return arr;
+}
+
+function showProgress(pct) {
+  const bar = document.getElementById('progressBar');
+  bar.style.display = 'block';
+  document.getElementById('progressFill').style.width = pct + '%';
+  if (pct >= 100) setTimeout(() => { bar.style.display = 'none'; }, 2000);
+}
+
+function setStatus(msg, cls) {
+  const el = document.getElementById('statusMsg');
+  el.textContent = msg; el.className = 'status-msg ' + (cls || '');
+}
+</script>
+</body>
+</html>
