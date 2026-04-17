@@ -363,26 +363,36 @@ async function loadProposal(file) {
 function parseProposalItems(text) {
   const items = [];
   const lines = text.split(/\n/);
-  
+  const NOISE = ['합계', '총계', '소계', '금액', '단가', '수량', '품의', '예산', '잔액', '일시'];
+
   lines.forEach(line => {
-    const cleanLine = line.replace(/\s+/g, ' ').trim();
-    // 금액 부분에 무조건 천단위 콤마가 포함되어 있도록 하여 연도(2026 등)와 오인식 방지
-    const match = cleanLine.match(/^(.*?)\s+([\d]{1,3}(?:,[\d]{3})+)\s*원?$/);
-    
+    const cl = line.replace(/\s+/g, ' ').trim();
+
+    // [수정1] 小写 옆 금액 우선 인식 (예: 小写 1,234.56 또는 小写 1234.56)
+    const xiaoxieMatch = cl.match(/小写\s*([\d,]+(?:\.\d+)?)/);
+    if (xiaoxieMatch) {
+      const amt = parseFloat(xiaoxieMatch[1].replace(/,/g, ''));
+      if (amt > 0) {
+        // 品명은 같은 줄 앞부분이나 직전 줄에서 추출 시도
+        const beforeXiao = cl.split('小写')[0].trim().replace(/^[\*\-\.\s]+/, '');
+        const name = (beforeXiao.length >= 2 && !/^[\d\.\-\/\s:]+$/.test(beforeXiao))
+          ? beforeXiao : '기안 품목';
+        items.push({ name, amount: amt });
+        return; // 이 줄은 완료
+      }
+    }
+
+    // 기존 패턴: 품명 + 천단위 콤마 금액
+    const match = cl.match(/^(.*?)\s+([\d]{1,3}(?:,[\d]{3})+(?:\.\d+)?)\s*원?$/);
     if (match) {
       let name = match[1].trim();
-      let amountStr = match[2].replace(/,/g, '');
-      let amount = parseInt(amountStr, 10);
-      
-      // 불필요한 단어 및 연도(2026) 노이즈 필터링
-      const isYear = amount >= 2000 && amount <= 2100 && amountStr.length === 4;
-      const isNoiseWord = ['합계', '총계', '소계', '금액', '단가', '수량', '품의', '예산', '잔액', '일시'].some(w => name.includes(w));
-      const isJustDateOrNum = /^[\d\.\-\/\s:a-zA-Z]+$/.test(name); // 날짜 형식이나 영숫자만 있는 경우 무시
-
-      // 정상적인 품명/금액만 배열에 추가
-      if (amount > 0 && !isYear && !isNoiseWord && !isJustDateOrNum && name.length >= 2) {
-         name = name.replace(/^[\*\-\.\s]+/, ''); // 앞부분 특수문자 제거
-         items.push({ name, amount });
+      const amt = parseFloat(match[2].replace(/,/g, ''));
+      const isYear = amt >= 2000 && amt <= 2100 && String(Math.round(amt)).length === 4;
+      const isNoise = NOISE.some(w => name.includes(w));
+      const isDateOrNum = /^[\d\.\-\/\s:a-zA-Z]+$/.test(name);
+      if (amt > 0 && !isYear && !isNoise && !isDateOrNum && name.length >= 2) {
+        name = name.replace(/^[\*\-\.\s]+/, '');
+        items.push({ name, amount: amt });
       }
     }
   });
@@ -662,8 +672,10 @@ function renderInvoiceTable() {
 }
 
 function formatNum(n) {
-  if (n == null || isNaN(n)) return '-';
-  return Number(n).toLocaleString('ko-KR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  if (n == null || isNaN(Number(n))) return '-';
+  const num = Number(n);
+  // 정수이면 콤마만, 소수가 있으면 최대 2자리
+  return num.toLocaleString('ko-KR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
 }
 
 // ────────────────────────────────────────────
@@ -705,65 +717,77 @@ async function processCombined() {
       }
     }
 
-    // 3. 원본 화표 파일들 변환 후 병합 (3페이지부터 시작)
+    // 3. 원본 화표 파일들 변환 후 병합 — 컬러 + 흑백 각 1장씩
     const SCALE = 5;
+
+    // 페이지당 렌더된 srcCanvas를 컬러/흑백 각각 PDF에 추가하는 헬퍼
+    async function addPageToDoc(doc, srcCanvas, origW, origH, paper) {
+      const { width: pageW, height: pageH } = paper;
+      const isLandscape = origW > origH;
+      const outCanvas = document.createElement('canvas');
+      outCanvas.width = pageW * SCALE; outCanvas.height = pageH * SCALE;
+      const octx = outCanvas.getContext('2d');
+      octx.fillStyle = '#ffffff'; octx.fillRect(0, 0, outCanvas.width, outCanvas.height);
+
+      let drawX, drawY, drawW, drawH, rotation = 0;
+      if (!isLandscape) {
+        const s = Math.min(pageW/origW, pageH/origH);
+        drawW = origW*s; drawH = origH*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
+      } else if (printMode === 'rotate') {
+        const s = Math.min(pageW/origH, pageH/origW);
+        drawW = origH*s; drawH = origW*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2; rotation = 90;
+      } else {
+        const s = Math.min(pageW/origW, pageH/origH);
+        drawW = origW*s; drawH = origH*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
+      }
+
+      if (rotation === 90) {
+        octx.save();
+        octx.translate((drawX+drawW/2)*SCALE, (drawY+drawH/2)*SCALE);
+        octx.rotate(-Math.PI/2);
+        octx.drawImage(srcCanvas, -drawH*SCALE/2, -drawW*SCALE/2, drawH*SCALE, drawW*SCALE);
+        octx.restore();
+      } else {
+        octx.drawImage(srcCanvas, drawX*SCALE, drawY*SCALE, drawW*SCALE, drawH*SCALE);
+      }
+
+      const imgBytes = dataURLtoBytes(outCanvas.toDataURL('image/jpeg', 0.95));
+      const img = await doc.embedJpg(imgBytes);
+      const pg = doc.addPage([pageW, pageH]);
+      pg.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
+    }
+
     for (const file of files) {
-      setStatus(`흑백 고화질 변환 중: ${file.name}`, '');
+      setStatus(`컬러+흑백 고화질 변환 중: ${file.name}`, '');
       const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
       for (let p = 0; p < pdfJs.numPages; p++) {
         const pdfPage = await pdfJs.getPage(p + 1);
         const origVp = pdfPage.getViewport({ scale: 1 });
         const origW = origVp.width, origH = origVp.height;
-        const isLandscape = origW > origH;
 
+        // 고해상도 렌더
         const srcCanvas = document.createElement('canvas');
-        const renderScale = SCALE * 1.5;
-        const srcVp = pdfPage.getViewport({ scale: renderScale });
+        const srcVp = pdfPage.getViewport({ scale: SCALE * 1.5 });
         srcCanvas.width = srcVp.width; srcCanvas.height = srcVp.height;
-        const srcCtx = srcCanvas.getContext('2d');
+        await pdfPage.render({ canvasContext: srcCanvas.getContext('2d'), viewport: srcVp }).promise;
 
-        await pdfPage.render({ canvasContext: srcCtx, viewport: srcVp }).promise;
+        // 컬러 페이지 추가
+        await addPageToDoc(finalDoc, srcCanvas, origW, origH, paper);
+        done++; showProgress((done/totalPages)*100);
 
-        const imgData = srcCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
+        // 흑백 페이지 추가 (별도 canvas에 그레이스케일 복사)
+        const grayCanvas = document.createElement('canvas');
+        grayCanvas.width = srcCanvas.width; grayCanvas.height = srcCanvas.height;
+        const gctx = grayCanvas.getContext('2d');
+        gctx.drawImage(srcCanvas, 0, 0);
+        const imgData = gctx.getImageData(0, 0, grayCanvas.width, grayCanvas.height);
         const d = imgData.data;
         for (let i = 0; i < d.length; i += 4) {
-          const gray = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-          d[i] = d[i+1] = d[i+2] = gray;
+          const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+          d[i] = d[i+1] = d[i+2] = g;
         }
-        srcCtx.putImageData(imgData, 0, 0);
-
-        const pageW = paper.width, pageH = paper.height;
-        const outCanvas = document.createElement('canvas');
-        outCanvas.width = pageW*SCALE; outCanvas.height = pageH*SCALE;
-        const octx = outCanvas.getContext('2d');
-        octx.fillStyle = '#ffffff'; octx.fillRect(0, 0, outCanvas.width, outCanvas.height);
-
-        let drawX, drawY, drawW, drawH, rotation = 0;
-        if (!isLandscape) {
-          const s = Math.min(pageW/origW, pageH/origH);
-          drawW = origW*s; drawH = origH*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
-        } else if (printMode === 'rotate') {
-          const s = Math.min(pageW/origH, pageH/origW);
-          drawW = origH*s; drawH = origW*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2; rotation = 90;
-        } else {
-          const s = Math.min(pageW/origW, pageH/origH);
-          drawW = origW*s; drawH = origH*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
-        }
-
-        if (rotation === 90) {
-          octx.save();
-          octx.translate((drawX+drawW/2)*SCALE, (drawY+drawH/2)*SCALE);
-          octx.rotate(-Math.PI/2);
-          octx.drawImage(srcCanvas, -drawH*SCALE/2, -drawW*SCALE/2, drawH*SCALE, drawW*SCALE);
-          octx.restore();
-        } else {
-          octx.drawImage(srcCanvas, drawX*SCALE, drawY*SCALE, drawW*SCALE, drawH*SCALE);
-        }
-
-        const imgBytes = dataURLtoBytes(outCanvas.toDataURL('image/jpeg', 0.95));
-        const img = await finalDoc.embedJpg(imgBytes);
-        const newPage = finalDoc.addPage([pageW, pageH]);
-        newPage.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
+        gctx.putImageData(imgData, 0, 0);
+        await addPageToDoc(finalDoc, grayCanvas, origW, origH, paper);
         done++; showProgress((done/totalPages)*100);
       }
     }
@@ -780,7 +804,7 @@ async function processCombined() {
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const dd = String(today.getDate()).padStart(2, '0');
     const dateStr = `${yyyy}${mm}${dd}`;
-    const amountStr = window.currentGrandTotal || '0';
+    const amountStr = Number(window.currentGrandTotal || 0).toFixed(2);
     a.download = `${dateStr}_${amountStr}.pdf`;
     
     a.click();
