@@ -372,13 +372,21 @@ async function loadProposal(file) {
 function parseProposalItems(text) {
   const items = [];
   const lines = text.split(/\n/);
+  // [수정1] 금액은 반드시 천 단위 콤마(,)가 포함된 숫자만 인식하도록 정규식 강화 (연도 등 오인식 방지)
+  const regex = /([가-힣a-zA-Z0-9\s\-\(\)\[\]]+?)\s+([\d]{1,3}(?:,[\d]{3})+)\s*원?/;
+  
   lines.forEach(line => {
-    // 영문, 숫자, 특수기호가 섞인 품명도 추출할 수 있도록 정규식 보완
-    const numMatch = line.match(/([가-힣a-zA-Z0-9\s\-\(\)\[\]]+?)\s+([\d,]{3,})\s*원?/);
+    const numMatch = line.match(regex);
     if (numMatch) {
+      let name = numMatch[1].trim();
       const amount = parseInt(numMatch[2].replace(/,/g, ''));
-      if (amount > 100) { 
-        items.push({ name: numMatch[1].trim(), amount });
+      
+      // 문서 헤더의 의미 없는 단어(품의, 합계, 연도 등)를 품명으로 잡는 것 방지
+      const ignoreWords = ['품의', '합계', '총계', '금액', '단가', '수량', '일금', '예산', '잔액'];
+      const isNoise = ignoreWords.some(w => name === w || name.endsWith(w));
+      
+      if (amount > 1000 && name.length > 1 && !isNoise) { 
+        items.push({ name, amount });
       }
     }
   });
@@ -562,7 +570,7 @@ async function analyzeInvoices() {
 }
 
 // ────────────────────────────────────────────
-//  결과 테이블 렌더링 (기안문 나란히 표시, 일치열 제거)
+//  결과 테이블 렌더링 (기안문 순서대로 매칭)
 // ────────────────────────────────────────────
 function renderInvoiceTable() {
   const tbody = document.getElementById('invBody');
@@ -573,6 +581,7 @@ function renderInvoiceTable() {
   let rowNum = 1;
   let grandTotal = 0;
   let grandCurrency = '';
+  let globalItemIdx = 0; // [수정2] 기안문 항목을 1번부터 차례대로 매칭하기 위한 인덱스
 
   invoiceData.forEach(inv => {
     const cur = inv.currency || '';
@@ -584,17 +593,14 @@ function renderInvoiceTable() {
 
       let proposalName = '-';
       let proposalAmt = '-';
-      if (proposalData && proposalData.items.length > 0) {
-        // 금액 기준으로 가장 가까운 항목을 나란히 배치 (비교 판정 삭제)
-        const matched = proposalData.items.reduce((best, pi) => {
-          const diff = Math.abs(pi.amount - amt);
-          return (!best || diff < best.diff) ? { ...pi, diff } : best;
-        }, null);
-        if (matched) {
-          proposalName = matched.name;
-          proposalAmt = formatNum(matched.amount);
-        }
+      
+      // [수정2] 금액 비교(Math.abs) 대신 단순히 순서대로(1:1) 매칭
+      if (proposalData && globalItemIdx < proposalData.items.length) {
+        const matched = proposalData.items[globalItemIdx];
+        proposalName = matched.name;
+        proposalAmt = formatNum(matched.amount);
       }
+      globalItemIdx++;
 
       tr.innerHTML = `
         <td>${rowNum++}</td>
@@ -819,7 +825,6 @@ async function insertSummaryPage(finalDoc, paper) {
   const usable = PW - pad * 2;
   const hasProp = proposalData && proposalData.items.length > 0;
   
-  // 일치 여부 열 제거하고 비율 조정
   const cols = hasProp
     ? [0.04, 0.15, 0.13, 0.18, 0.18, 0.06, 0.13, 0.13]
     : [0.05, 0.22, 0.22, 0.07, 0.14, 0.14, 0.16];
@@ -847,6 +852,7 @@ async function insertSummaryPage(finalDoc, paper) {
   let rowNum = 1;
   let grandTotal = 0;
   let grandCur = '';
+  let globalItemIdx = 0; // [수정2] 요약표에서도 순서대로 매칭
   const maxY = PH - pad - 60 * SC;
 
   invoiceData.forEach(inv => {
@@ -863,10 +869,10 @@ async function insertSummaryPage(finalDoc, paper) {
 
       let cells;
       if (hasProp) {
-        const matched = proposalData.items.reduce((best, pi) => {
-          const diff = Math.abs(pi.amount - amt);
-          return (!best || diff < best.diff) ? { ...pi, diff } : best;
-        }, null);
+        let matched = null;
+        if (globalItemIdx < proposalData.items.length) {
+          matched = proposalData.items[globalItemIdx];
+        }
         cells = [
           String(rowNum++),
           matched?.name || '-',
@@ -877,6 +883,7 @@ async function insertSummaryPage(finalDoc, paper) {
           item.unitPrice != null ? formatNum(item.unitPrice) : '-',
           formatNum(amt) + (cur ? ' '+cur : '')
         ];
+        globalItemIdx++;
       } else {
         cells = [
           String(rowNum++),
@@ -919,8 +926,13 @@ async function insertSummaryPage(finalDoc, paper) {
     ctx.font = `bold ${11*SC}px "Noto Sans KR", sans-serif`;
     drawCellText(ctx, '📦 전체 총 합계', colX[0], y, usable*0.68, 30*SC, 'left');
     ctx.font = `bold ${13*SC}px "Space Mono", monospace`;
+    
+    // [수정3] 전체 총 합계 글자가 잘리지 않도록 넉넉한 공간 부여 (바로 앞 컬럼부터 두 칸을 사용)
     const targetColIdx = hasProp ? 7 : 5;
-    drawCellText(ctx, formatNum(grandTotal)+(grandCur?' '+grandCur:''), colX[targetColIdx], y, usable*cols[targetColIdx], 30*SC, 'right');
+    const totalText = formatNum(grandTotal) + (grandCur ? ' ' + grandCur : '');
+    const startX = colX[targetColIdx - 1]; 
+    const totalW = usable * (cols[targetColIdx - 1] + cols[targetColIdx]); 
+    drawCellText(ctx, totalText, startX, y, totalW, 30*SC, 'right');
   }
 
   const jpegB64 = canvas.toDataURL('image/jpeg', 0.92).split(',')[1];
