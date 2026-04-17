@@ -591,7 +591,7 @@ function formatNum(n) {
 }
 
 // ────────────────────────────────────────────
-//  PDF 병합 + 화표 요약 첫 페이지 삽입
+//  PDF 병합 + 화표 요약 + 기안문 원본 + 화표 원본 삽입
 // ────────────────────────────────────────────
 async function processCombined() {
   if (files.length === 0) return;
@@ -604,20 +604,45 @@ async function processCombined() {
 
   try {
     const paper = getPaper();
-    const total = files.reduce((s, f) => s + f.pages, 0);
-    const totalPages = total * 2;
-    let done = 0;
-
+    const invoicePagesCount = files.reduce((s, f) => s + f.pages, 0);
+    // 총 페이지 계산 (요약 1 + 기안문 + 화표 컬러 + 화표 흑백)
     const finalDoc = await PDFLib.PDFDocument.create();
 
+    // 1. 화표 요약 페이지 생성 (첫 번째 페이지)
     if (invMode === 'on' && invoiceData.length > 0) {
       setStatus('화표 요약 페이지 생성 중...', '');
       await insertSummaryPage(finalDoc, paper);
     }
 
-    // ── PASS 1: 컬러 원본 ──
+    // 2. 기안문 원본 삽입 (두 번째 페이지부터)
+    if (proposalFile) {
+      setStatus('기안문 원본 페이지 삽입 중...', '');
+      const propDoc = await PDFLib.PDFDocument.load(proposalFile.buf.slice(0));
+      for (let p = 0; p < propDoc.getPageCount(); p++) {
+        const [embedded] = await finalDoc.embedPdf(propDoc, [p]);
+        const { width: origW, height: origH } = embedded;
+        const isLandscape = origW > origH;
+        const pageW = paper.width, pageH = paper.height;
+        const newPage = finalDoc.addPage([pageW, pageH]);
+        
+        let x, y, w, h, angle = 0;
+        const s = Math.min(pageW / (isLandscape && printMode === 'rotate' ? origH : origW), 
+                           pageH / (isLandscape && printMode === 'rotate' ? origW : origH));
+        w = origW * s; h = origH * s;
+        
+        if (isLandscape && printMode === 'rotate') {
+          x = (pageW - h) / 2; y = (pageH - w) / 2;
+          newPage.drawPage(embedded, { x: x + h, y, width: w, height: h, rotate: PDFLib.degrees(90) });
+        } else {
+          x = (pageW - w) / 2; y = (pageH - h) / 2;
+          newPage.drawPage(embedded, { x, y, width: w, height: h });
+        }
+      }
+    }
+
+    // 3. PASS 1: 화표 컬러 원본
     for (const file of files) {
-      setStatus(`컬러 원본 처리 중: ${file.name}`, '');
+      setStatus(`화표 컬러 원본 처리 중: ${file.name}`, '');
       const srcDoc = await PDFLib.PDFDocument.load(file.buf.slice(0));
       for (let p = 0; p < srcDoc.getPageCount(); p++) {
         const [embedded] = await finalDoc.embedPdf(srcDoc, [p]);
@@ -625,30 +650,26 @@ async function processCombined() {
         const isLandscape = origW > origH;
         const pageW = paper.width, pageH = paper.height;
         const newPage = finalDoc.addPage([pageW, pageH]);
-        let x, y, w, h, angle = 0;
-        if (!isLandscape) {
-          const s = Math.min(pageW / origW, pageH / origH);
-          w = origW*s; h = origH*s; x = (pageW-w)/2; y = (pageH-h)/2;
-        } else if (printMode === 'rotate') {
-          const s = Math.min(pageW/origH, pageH/origW);
-          w = origW*s; h = origH*s; x = (pageW-h)/2; y = (pageH-w)/2; angle = 90;
+        
+        let x, y, w, h;
+        const s = Math.min(pageW / (isLandscape && printMode === 'rotate' ? origH : origW), 
+                           pageH / (isLandscape && printMode === 'rotate' ? origW : origH));
+        w = origW * s; h = origH * s;
+
+        if (isLandscape && printMode === 'rotate') {
+          x = (pageW - h) / 2; y = (pageH - w) / 2;
+          newPage.drawPage(embedded, { x: x + h, y, width: w, height: h, rotate: PDFLib.degrees(90) });
         } else {
-          const s = Math.min(pageW/origW, pageH/origH);
-          w = origW*s; h = origH*s; x = (pageW-w)/2; y = (pageH-h)/2;
-        }
-        if (angle === 90) {
-          newPage.drawPage(embedded, { x: x+h, y, width: w, height: h, rotate: PDFLib.degrees(90) });
-        } else {
+          x = (pageW - w) / 2; y = (pageH - h) / 2;
           newPage.drawPage(embedded, { x, y, width: w, height: h });
         }
-        done++; showProgress((done/totalPages)*100);
       }
     }
 
-    // ── PASS 2: 흑백 고화질 ──
+    // 4. PASS 2: 화표 흑백 고화질 변환 (인쇄용)
     const SCALE = 5;
     for (const file of files) {
-      setStatus(`흑백 고화질 변환 중: ${file.name}`, '');
+      setStatus(`화표 흑백 고화질 변환 중: ${file.name}`, '');
       const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
       for (let p = 0; p < file.pages; p++) {
         const pdfPage = await pdfJs.getPage(p+1);
@@ -657,6 +678,7 @@ async function processCombined() {
         srcCanvas.width = vp.width; srcCanvas.height = vp.height;
         const srcCtx = srcCanvas.getContext('2d', { willReadFrequently: true });
         await pdfPage.render({ canvasContext: srcCtx, viewport: vp }).promise;
+        
         const imgData = srcCtx.getImageData(0, 0, vp.width, vp.height);
         const d = imgData.data;
         for (let i = 0; i < d.length; i += 4) {
@@ -664,39 +686,37 @@ async function processCombined() {
           d[i] = d[i+1] = d[i+2] = g;
         }
         srcCtx.putImageData(imgData, 0, 0);
-        const origW = vp.width/SCALE, origH = vp.height/SCALE;
-        const isLandscape = origW > origH;
+
         const pageW = paper.width, pageH = paper.height;
         const outCanvas = document.createElement('canvas');
-        outCanvas.width = pageW*SCALE; outCanvas.height = pageH*SCALE;
+        outCanvas.width = pageW * SCALE; outCanvas.height = pageH * SCALE;
         const octx = outCanvas.getContext('2d');
         octx.fillStyle = '#ffffff'; octx.fillRect(0, 0, outCanvas.width, outCanvas.height);
-        let drawX, drawY, drawW, drawH, rotation = 0;
-        if (!isLandscape) {
-          const s = Math.min(pageW/origW, pageH/origH);
-          drawW = origW*s; drawH = origH*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
-        } else if (printMode === 'rotate') {
-          const s = Math.min(pageW/origH, pageH/origW);
-          drawW = origH*s; drawH = origW*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2; rotation = 90;
-        } else {
-          const s = Math.min(pageW/origW, pageH/origH);
-          drawW = origW*s; drawH = origH*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
-        }
-        if (rotation === 90) {
+
+        const isLandscape = (vp.width/SCALE) > (vp.height/SCALE);
+        let drawX, drawY, drawW, drawH;
+        
+        if (isLandscape && printMode === 'rotate') {
+          const s = Math.min(pageW/(vp.height/SCALE), pageH/(vp.width/SCALE));
+          drawW = (vp.height/SCALE)*s; drawH = (vp.width/SCALE)*s;
+          drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
           octx.save();
           octx.translate((drawX+drawW/2)*SCALE, (drawY+drawH/2)*SCALE);
           octx.rotate(-Math.PI/2);
           octx.drawImage(srcCanvas, -drawH*SCALE/2, -drawW*SCALE/2, drawH*SCALE, drawW*SCALE);
           octx.restore();
         } else {
+          const s = Math.min(pageW/(vp.width/SCALE), pageH/(vp.height/SCALE));
+          drawW = (vp.width/SCALE)*s; drawH = (vp.height/SCALE)*s;
+          drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
           octx.drawImage(srcCanvas, drawX*SCALE, drawY*SCALE, drawW*SCALE, drawH*SCALE);
         }
+
         const base64Data = outCanvas.toDataURL('image/jpeg', 0.95);
         const imgBytes = dataURLtoBytes(base64Data);
         const img = await finalDoc.embedJpg(imgBytes);
         const newPage = finalDoc.addPage([pageW, pageH]);
         newPage.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
-        done++; showProgress((done/totalPages)*100);
       }
     }
 
@@ -705,24 +725,18 @@ async function processCombined() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-
-    // 동적 파일명 생성 (오늘날짜_총금액)
+    
     let grandTotalFilename = 0;
     invoiceData.forEach(inv => grandTotalFilename += Number(inv.total || 0));
-    
-    // JS 부동소수점 오류 해결 (소수점 2자리까지만 남기고 잘라냄)
     grandTotalFilename = parseFloat(grandTotalFilename.toFixed(2));
     
     const today = new Date();
-    const yyyy = today.getFullYear();
-    const mm = String(today.getMonth() + 1).padStart(2, '0');
-    const dd = String(today.getDate()).padStart(2, '0');
+    const yyyy = today.getFullYear(), mm = String(today.getMonth() + 1).padStart(2, '0'), dd = String(today.getDate()).padStart(2, '0');
     a.download = `${yyyy}-${mm}-${dd}_${grandTotalFilename}.pdf`;
-    
     a.click();
     setTimeout(() => URL.revokeObjectURL(url), 5000);
 
-    setStatus(`✅ 다운로드 완료! 총 ${totalPages}페이지 고화질 변환 성공`, 'success');
+    setStatus(`✅ 다운로드 완료!`, 'success');
     showProgress(100);
   } catch(err) {
     console.error(err);
