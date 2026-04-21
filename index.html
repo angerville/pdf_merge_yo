@@ -263,7 +263,7 @@
       </div>
     </div>
     <div class="option-row">
-      <div><div class="option-label">물품검수서 삽입</div><div class="option-desc">내장된 물품검수서 양식을 요약표 다음 페이지(2페이지)에 자동 삽입</div></div>
+      <div><div class="option-label">물품검수서 삽입</div><div class="option-desc">내장된 물품검수서 양식을 맨 마지막 페이지에 자동 삽입</div></div>
       <div class="toggle-group">
         <button class="toggle-btn active" data-insp="on" onclick="setInspMode('on')">포함</button>
         <button class="toggle-btn" data-insp="off" onclick="setInspMode('off')">제외</button>
@@ -293,7 +293,7 @@
       <span class="btn-icon">🔍</span> 기안문-화표 요약 분석 시작
     </button>
     <button class="btn btn-color" id="btnMerge" onclick="processCombined()">
-      <span class="btn-icon">🚀</span> 고화질 컬러+흑백 병합본 다운로드 (검수서 2페이지 자동포함)
+      <span class="btn-icon">🚀</span> 고화질 컬러+흑백 병합본 다운로드 (기안문 1페이지 · 검수서 마지막)
     </button>
   </div>
 
@@ -319,7 +319,8 @@ let invMode = 'on';
 let inspMode = 'on';
 let dragSrcIdx = null;
 let invoiceData = [];
-let proposalData = null; 
+let proposalData = null;
+let proposalPdfBuf = null; // 기안문 원본 PDF 버퍼 (1페이지 삽입용)
 
 const A4 = { width: 595.28, height: 841.89 };
 const LETTER = { width: 612, height: 792 };
@@ -343,26 +344,48 @@ proposalZone.addEventListener('drop', e => {
 async function loadProposal(file) {
   try {
     const buf = await file.arrayBuffer();
+    // 기안문 원본 버퍼를 전역에 저장 (1페이지 삽입용)
+    proposalPdfBuf = buf.slice(0);
     const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
 
-    document.getElementById('proposalNameDisplay').textContent = `⏳ ${file.name} AI 분석 중...`;
+    document.getElementById('proposalNameDisplay').textContent = `⏳ ${file.name} 텍스트 추출 중...`;
     document.getElementById('proposalNameDisplay').style.color = 'var(--accent2)';
 
-    // PDF 페이지를 이미지로 변환
-    const pageImages = [];
+    // ── 속도 최적화: 텍스트 먼저 추출, 이미지는 scale 1.2로 축소 + 병렬 렌더 ──
     const pagesToScan = Math.min(pdf.numPages, 5);
-    for (let p = 0; p < pagesToScan; p++) {
-      const pdfPage = await pdf.getPage(p + 1);
-      const vp = pdfPage.getViewport({ scale: 2.0 });
-      const canvas = document.createElement('canvas');
-      canvas.width = vp.width; canvas.height = vp.height;
-      await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
-      pageImages.push(canvas.toDataURL('image/jpeg', 0.85).split(',')[1]);
+
+    // 1) 텍스트 추출 (빠름)
+    let extractedText = '';
+    for (let p = 1; p <= pagesToScan; p++) {
+      const page = await pdf.getPage(p);
+      const tc = await page.getTextContent();
+      extractedText += tc.items.map(i => i.str).join(' ') + '\n';
     }
+
+    document.getElementById('proposalNameDisplay').textContent = `⏳ ${file.name} AI 분석 중...`;
+
+    // 2) 이미지 병렬 렌더링 (scale 1.2, quality 0.75 — 충분히 선명하되 빠름)
+    const renderTasks = [];
+    for (let p = 0; p < pagesToScan; p++) {
+      renderTasks.push((async (pageIdx) => {
+        const pdfPage = await pdf.getPage(pageIdx + 1);
+        const vp = pdfPage.getViewport({ scale: 1.2 });
+        const canvas = document.createElement('canvas');
+        canvas.width = vp.width; canvas.height = vp.height;
+        await pdfPage.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+        return canvas.toDataURL('image/jpeg', 0.75).split(',')[1];
+      })(p));
+    }
+    const pageImages = await Promise.all(renderTasks);
 
     // Gemini AI로 기안문 분석
     const PROPOSAL_PROMPT = `이것은 학교 기안문(품의서)입니다.
-문서에서 구매 품목 목록을 추출하세요. 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
+아래는 PDF에서 추출한 텍스트입니다(참고용):
+---
+${extractedText.slice(0, 3000)}
+---
+이미지도 함께 첨부됩니다. 텍스트와 이미지를 종합하여 구매 품목 목록을 추출하세요.
+아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
 
 {
   "items": [
@@ -827,23 +850,22 @@ async function processCombined() {
 
     const finalDoc = await PDFLib.PDFDocument.create();
 
-    // 1. 화표 요약 첫 페이지 생성 (항상 1페이지)
+    // 1. 기안문 원본을 1페이지에 그대로 삽입
+    if (proposalPdfBuf) {
+      setStatus('기안문 삽입 중...', '');
+      try {
+        const propDoc = await PDFLib.PDFDocument.load(proposalPdfBuf);
+        const copiedPropPages = await finalDoc.copyPages(propDoc, propDoc.getPageIndices());
+        copiedPropPages.forEach(p => finalDoc.addPage(p));
+      } catch(e) {
+        console.warn('기안문 삽입 실패:', e.message);
+      }
+    }
+
+    // 2. 화표 요약 페이지 생성 (기안문 다음)
     if (invMode === 'on' && invoiceData.length > 0) {
       setStatus('화표 요약 페이지 생성 중...', '');
       await insertSummaryPage(finalDoc, paper);
-    }
-
-    // 2. [수정5] 물품검수서를 요약표 바로 다음(2페이지)에 오도록 순서 재배치
-    if (inspMode === 'on') {
-      try {
-        setStatus('물품검수서 삽입 중...', '');
-        const inspBytes = Uint8Array.from(atob(INSPECTION_FORM_BASE64), c => c.charCodeAt(0));
-        const inspDoc = await PDFLib.PDFDocument.load(inspBytes);
-        const copiedPages = await finalDoc.copyPages(inspDoc, inspDoc.getPageIndices());
-        copiedPages.forEach(p => finalDoc.addPage(p));
-      } catch(e) {
-        console.warn('물품검수서 삽입 실패 (Base64 불완전):', e.message);
-      }
     }
 
     // 3. 원본 화표 파일들 변환 후 병합 — 전체 컬러 먼저, 전체 흑백 나중
@@ -932,6 +954,19 @@ async function processCombined() {
     for (const rp of renderedPages) {
       await addPageToDoc(finalDoc, rp.srcCanvas, rp.origW, rp.origH, paper, true);
       done++; showProgress(65 + (done/totalPages)*35);
+    }
+
+    // 4. 물품검수서를 맨 마지막 페이지에 삽입
+    if (inspMode === 'on') {
+      try {
+        setStatus('물품검수서 삽입 중 (마지막 페이지)...', '');
+        const inspBytes = Uint8Array.from(atob(INSPECTION_FORM_BASE64), c => c.charCodeAt(0));
+        const inspDoc = await PDFLib.PDFDocument.load(inspBytes);
+        const copiedPages = await finalDoc.copyPages(inspDoc, inspDoc.getPageIndices());
+        copiedPages.forEach(p => finalDoc.addPage(p));
+      } catch(e) {
+        console.warn('물품검수서 삽입 실패 (Base64 불완전):', e.message);
+      }
     }
 
     const pdfBytes = await finalDoc.save();
