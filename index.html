@@ -201,6 +201,43 @@
   }
   @keyframes spin { to { transform: rotate(360deg); } }
   .item-qty { color: var(--text-muted); font-size: 11px; }
+
+  .teacher-name-row {
+    background: rgba(124,111,247,0.08);
+    border: 1.5px solid var(--accent);
+    border-radius: 10px;
+    padding: 14px 16px;
+    margin-bottom: 4px;
+  }
+  .teacher-name-row .option-label {
+    font-size: 15px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 0.3px;
+  }
+  .teacher-name-row .option-desc {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 3px;
+  }
+  .teacher-name-input {
+    flex: 1;
+    background: var(--surface2);
+    border: 1.5px solid var(--accent);
+    border-radius: 8px;
+    padding: 10px 14px;
+    color: var(--text);
+    font-size: 15px;
+    font-weight: 700;
+    font-family: 'Noto Sans KR', sans-serif;
+    outline: none;
+    letter-spacing: 0.5px;
+    min-width: 120px;
+    max-width: 180px;
+    text-align: center;
+  }
+  .teacher-name-input:focus { border-color: var(--accent2); box-shadow: 0 0 0 3px rgba(124,111,247,0.18); }
+  .teacher-name-input::placeholder { color: var(--text-muted); font-weight: 400; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -237,8 +274,15 @@
 
   <div class="options-panel" id="optionsPanel" style="display:none">
     <h3>변환 옵션</h3>
+    <div class="option-row teacher-name-row">
+      <div>
+        <div class="option-label">✏️ 교사 이름</div>
+        <div class="option-desc">기안문 업로드 시 자동 인식 · 직접 수정 가능</div>
+      </div>
+      <input type="text" id="teacherNameInput" class="teacher-name-input" placeholder="예) 윤다영">
+    </div>
     <div class="option-row">
-      <div><div class="option-label">요약표 제목</div><div class="option-desc">첫 페이지 상단에 표시될 제목</div></div>
+      <div><div class="option-label">요약표 제목</div><div class="option-desc">기안문 업로드 시 제목 자동 인식 · 직접 수정 가능</div></div>
       <input type="text" id="summaryTitle" class="api-key-input" style="width:280px;" value="화표 품목 요약표">
     </div>
     <div class="option-row">
@@ -384,10 +428,12 @@ async function loadProposal(file) {
 ---
 ${extractedText.slice(0, 3000)}
 ---
-이미지도 함께 첨부됩니다. 텍스트와 이미지를 종합하여 구매 품목 목록을 추출하세요.
+이미지도 함께 첨부됩니다. 텍스트와 이미지를 종합하여 아래 정보를 추출하세요.
 아래 JSON 형식으로만 응답하세요. 다른 텍스트는 절대 포함하지 마세요.
 
 {
+  "teacherName": "신청인(申请人) 교사 이름 (문서 상단 결재란의 교사 이름, 없으면 null)",
+  "documentTitle": "标题(표제/제목) 항목의 내용 (없으면 null)",
   "items": [
     {
       "name": "품명 (한글로, 간결하게)",
@@ -398,9 +444,11 @@ ${extractedText.slice(0, 3000)}
 }
 
 주의사항:
-- 합계/총계/소계 행은 제외
+- teacherName: 결재란 상단 '申请人(신청인)' 또는 '교사' 열 아래의 이름만 추출 (예: 윤다영)
+- documentTitle: '标题:' 또는 '제목:' 뒤에 오는 텍스트 (예: 2026년 초등 학습준비물 물품 구입 (3차))
+- 합계/총계/소계 행은 items에서 제외
 - 단가×수량=금액인 경우 금액(합산)을 사용
-- 항목이 명확하지 않으면 빈 배열`;
+- 항목이 명확하지 않으면 items를 빈 배열로`;
 
     const parts = [{ text: PROPOSAL_PROMPT }];
     pageImages.forEach(b64 => {
@@ -428,7 +476,14 @@ ${extractedText.slice(0, 3000)}
         const tc = await page.getTextContent();
         fullText += tc.items.map(i => i.str).join(' ') + '\n';
       }
-      parsed = { items: parseProposalItemsFallback(fullText) };
+      // 폴백: 텍스트에서 제목/교사 이름 추출 시도
+      const titleMatch = fullText.match(/[标標]题[：:]\s*(.+?)(?:\n|$)/);
+      const teacherMatch = fullText.match(/교사\s+(\S+)/);
+      parsed = {
+        items: parseProposalItemsFallback(fullText),
+        documentTitle: titleMatch ? titleMatch[1].trim() : null,
+        teacherName: teacherMatch ? teacherMatch[1].trim() : null
+      };
     }
 
     proposalData = { items: parsed.items || [] };
@@ -436,6 +491,17 @@ ${extractedText.slice(0, 3000)}
     document.getElementById('proposalNameDisplay').textContent =
       `✅ ${file.name} 분석 완료 — ${proposalData.items.length}개 품목 인식`;
     document.getElementById('proposalNameDisplay').style.color = 'var(--success)';
+
+    // 기안문 제목 → 요약표 제목 필드에 자동 설정
+    // 교사 이름 → 교사 이름 필드에 별도 자동 설정
+    const docTitle = parsed.documentTitle ? parsed.documentTitle.trim() : '';
+    const teacherName = parsed.teacherName ? parsed.teacherName.trim() : '';
+    if (docTitle) {
+      document.getElementById('summaryTitle').value = docTitle;
+    }
+    if (teacherName) {
+      document.getElementById('teacherNameInput').value = teacherName;
+    }
   } catch (err) {
     setStatus('❌ 기안문 로드 오류: ' + err.message, 'error');
     document.getElementById('proposalNameDisplay').textContent = '❌ 분석 실패 — 다시 시도하세요';
@@ -1013,7 +1079,9 @@ async function insertSummaryPage(finalDoc, paper) {
   const pad = 40 * SC;
   let y = pad;
 
-  const titleText = document.getElementById('summaryTitle')?.value?.trim() || '화표 품목 요약표';
+  const summaryTitleBase = document.getElementById('summaryTitle')?.value?.trim() || '화표 품목 요약표';
+  const teacherNameVal = document.getElementById('teacherNameInput')?.value?.trim() || '';
+  const titleText = teacherNameVal ? `${summaryTitleBase} - ${teacherNameVal}` : summaryTitleBase;
   ctx.fillStyle = '#1a1a2e';
   ctx.font = `bold ${18*SC}px "Noto Sans KR", sans-serif`;
   ctx.fillText(titleText, pad, y + 18*SC);
