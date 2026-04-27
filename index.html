@@ -406,6 +406,18 @@ async function loadProposal(file) {
       extractedText += tc.items.map(i => i.str).join(' ') + '\n';
     }
 
+    // 1-a) 텍스트에서 제목·교사 이름 즉시 추출 (AI 실패 시 백업 + 즉시 표시)
+    // PDF.js는 텍스트 조각을 공백으로 이어붙이므로 유연한 패턴 사용
+    const textTitleMatch   = extractedText.match(/[标標][题題]\s*[：:]\s*(.{4,80}?)(?:\s{2,}|$)/m)
+                          || extractedText.match(/标题\s*(.{4,80}?)(?:\s{2,}|$)/m);
+    const textTeacherMatch = extractedText.match(/(?:교사|申请人)[^\S\n]*(\S{2,6})/);
+    const titleFromText    = textTitleMatch  ? textTitleMatch[1].trim() : '';
+    const teacherFromText  = textTeacherMatch ? textTeacherMatch[1].trim() : '';
+
+    // 텍스트 파싱 결과 즉시 필드에 반영 (AI 완료 후 덮어쓸 수 있음)
+    if (titleFromText)   document.getElementById('summaryTitle').value     = titleFromText;
+    if (teacherFromText) document.getElementById('teacherNameInput').value = teacherFromText;
+
     document.getElementById('proposalNameDisplay').textContent = `⏳ ${file.name} AI 분석 중...`;
 
     // 2) 이미지 병렬 렌더링 (scale 1.2, quality 0.75 — 충분히 선명하되 빠름)
@@ -444,7 +456,7 @@ ${extractedText.slice(0, 3000)}
 }
 
 주의사항:
-- teacherName: 결재란 상단 '申请人(신청인)' 또는 '교사' 열 아래의 이름만 추출 (예: 김정준)
+- teacherName: 결재란 상단 '申请人(신청인)' 또는 '교사' 열 아래의 이름만 추출 (예: 윤다영)
 - documentTitle: '标题:' 또는 '제목:' 뒤에 오는 텍스트 (예: 2026년 초등 학습준비물 물품 구입 (3차))
 - 합계/총계/소계 행은 items에서 제외
 - 단가×수량=금액인 경우 금액(합산)을 사용
