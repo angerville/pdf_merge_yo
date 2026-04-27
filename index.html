@@ -941,9 +941,14 @@ async function processCombined() {
     }
 
     // 2. 화표 요약 페이지 생성 (기안문 다음)
+    let computedGrandTotal = 0;
+    // invoiceData에서 직접 합산 (분석 버튼 안 눌러도 정확한 값 사용)
+    invoiceData.forEach(inv => { if (inv.total != null) computedGrandTotal += Number(inv.total); });
+    if (!computedGrandTotal) computedGrandTotal = window.currentGrandTotal || 0;
+
     if (invMode === 'on' && invoiceData.length > 0) {
       setStatus('화표 요약 페이지 생성 중...', '');
-      await insertSummaryPage(finalDoc, paper);
+      computedGrandTotal = await insertSummaryPage(finalDoc, paper);
     }
 
     // 3. 원본 화표 파일들 변환 후 병합 — 전체 컬러 먼저, 전체 흑백 나중
@@ -1059,7 +1064,7 @@ async function processCombined() {
     const mm = String(today.getMonth() + 1).padStart(2, '0');
     const dd = String(today.getDate()).padStart(2, '0');
     const dateStr = `${yyyy}${mm}${dd}`;
-    const amountStr = Number(window.currentGrandTotal || 0).toFixed(2);
+    const amountStr = Number(computedGrandTotal || 0).toFixed(2);
     a.download = `${dateStr}_${amountStr}.pdf`;
     
     a.click();
@@ -1224,6 +1229,7 @@ async function insertSummaryPage(finalDoc, paper) {
   // 변경됨: insertPage(0) 대신 addPage() 사용하여 무조건 1페이지에 삽입됨 (finalDoc.create 직후)
   const summaryPage = finalDoc.addPage([paper.width, paper.height]);
   summaryPage.drawImage(img, { x: 0, y: 0, width: paper.width, height: paper.height });
+  return grandTotal;
 }
 
 function drawCellText(ctx, text, x, y, w, h, align) {
