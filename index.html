@@ -951,11 +951,12 @@ async function processCombined() {
       computedGrandTotal = await insertSummaryPage(finalDoc, paper);
     }
 
-    // 3. 원본 화표 파일들 변환 후 병합 — 전체 컬러 먼저, 전체 흑백 나중
+    // 3. 원본 화표 파일들 병합 — 컬러는 PDF 원본 그대로 복사, 흑백은 canvas 래스터 변환
     const SCALE = 5;
+    const total = files.reduce((s, f) => s + f.pages, 0);
 
-    // 렌더된 srcCanvas를 지정 doc에 컬러 또는 흑백으로 추가하는 헬퍼
-    async function addPageToDoc(doc, srcCanvas, origW, origH, paper, grayscale) {
+    // ── 흑백 전용 헬퍼: canvas → 흑백 JPEG → PDF 페이지 추가 ──
+    async function addGrayscalePageToDoc(doc, srcCanvas, origW, origH, paper) {
       const { width: pageW, height: pageH } = paper;
       const isLandscape = origW > origH;
       const outCanvas = document.createElement('canvas');
@@ -975,30 +976,27 @@ async function processCombined() {
         drawW = origW*s; drawH = origH*s; drawX = (pageW-drawW)/2; drawY = (pageH-drawH)/2;
       }
 
-      let drawSrc = srcCanvas;
-      if (grayscale) {
-        const grayCanvas = document.createElement('canvas');
-        grayCanvas.width = srcCanvas.width; grayCanvas.height = srcCanvas.height;
-        const gctx = grayCanvas.getContext('2d');
-        gctx.drawImage(srcCanvas, 0, 0);
-        const imgData = gctx.getImageData(0, 0, grayCanvas.width, grayCanvas.height);
-        const d = imgData.data;
-        for (let i = 0; i < d.length; i += 4) {
-          const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
-          d[i] = d[i+1] = d[i+2] = g;
-        }
-        gctx.putImageData(imgData, 0, 0);
-        drawSrc = grayCanvas;
+      // 흑백 변환
+      const grayCanvas = document.createElement('canvas');
+      grayCanvas.width = srcCanvas.width; grayCanvas.height = srcCanvas.height;
+      const gctx = grayCanvas.getContext('2d');
+      gctx.drawImage(srcCanvas, 0, 0);
+      const imgData = gctx.getImageData(0, 0, grayCanvas.width, grayCanvas.height);
+      const d = imgData.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const g = 0.299*d[i] + 0.587*d[i+1] + 0.114*d[i+2];
+        d[i] = d[i+1] = d[i+2] = g;
       }
+      gctx.putImageData(imgData, 0, 0);
 
       if (rotation === 90) {
         octx.save();
         octx.translate((drawX+drawW/2)*SCALE, (drawY+drawH/2)*SCALE);
         octx.rotate(-Math.PI/2);
-        octx.drawImage(drawSrc, -drawH*SCALE/2, -drawW*SCALE/2, drawH*SCALE, drawW*SCALE);
+        octx.drawImage(grayCanvas, -drawH*SCALE/2, -drawW*SCALE/2, drawH*SCALE, drawW*SCALE);
         octx.restore();
       } else {
-        octx.drawImage(drawSrc, drawX*SCALE, drawY*SCALE, drawW*SCALE, drawH*SCALE);
+        octx.drawImage(grayCanvas, drawX*SCALE, drawY*SCALE, drawW*SCALE, drawH*SCALE);
       }
 
       const imgBytes = dataURLtoBytes(outCanvas.toDataURL('image/jpeg', 0.95));
@@ -1007,10 +1005,46 @@ async function processCombined() {
       pg.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
     }
 
-    // 모든 파일의 렌더된 페이지 canvas를 미리 수집
+    // ── 컬러: PDF 원본 페이지를 pdf-lib으로 직접 복사 (도장·투명 레이어 완전 보존) ──
+    setStatus('컬러 페이지 병합 중 (원본 그대로)...', '');
+    for (const file of files) {
+      try {
+        const srcDoc = await PDFLib.PDFDocument.load(file.buf.slice(0), { ignoreEncryption: true });
+        const copiedPages = await finalDoc.copyPages(srcDoc, srcDoc.getPageIndices());
+        copiedPages.forEach(p => finalDoc.addPage(p));
+      } catch(e) {
+        console.warn(`컬러 원본 복사 실패(${file.name}), canvas 렌더 폴백:`, e.message);
+        // 폴백: canvas 렌더 후 컬러 JPEG으로 추가
+        const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
+        for (let p = 0; p < pdfJs.numPages; p++) {
+          const pdfPage = await pdfJs.getPage(p + 1);
+          const origVp = pdfPage.getViewport({ scale: 1 });
+          const origW = origVp.width, origH = origVp.height;
+          const { width: pageW, height: pageH } = paper;
+          const srcCanvas = document.createElement('canvas');
+          const srcVp = pdfPage.getViewport({ scale: SCALE * 1.5 });
+          srcCanvas.width = srcVp.width; srcCanvas.height = srcVp.height;
+          await pdfPage.render({ canvasContext: srcCanvas.getContext('2d'), viewport: srcVp }).promise;
+          const outCanvas = document.createElement('canvas');
+          outCanvas.width = pageW * SCALE; outCanvas.height = pageH * SCALE;
+          const octx = outCanvas.getContext('2d');
+          octx.fillStyle = '#ffffff'; octx.fillRect(0, 0, outCanvas.width, outCanvas.height);
+          const s = Math.min(pageW/origW, pageH/origH);
+          const dW = origW*s, dH = origH*s;
+          octx.drawImage(srcCanvas, (pageW-dW)/2*SCALE, (pageH-dH)/2*SCALE, dW*SCALE, dH*SCALE);
+          const imgBytes = dataURLtoBytes(outCanvas.toDataURL('image/jpeg', 0.95));
+          const img = await finalDoc.embedJpg(imgBytes);
+          const pg = finalDoc.addPage([pageW, pageH]);
+          pg.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
+        }
+      }
+      done += file.pages; showProgress(30 + (done/total)*35);
+    }
+
+    // ── 흑백: canvas 래스터 변환 후 추가 ──
+    setStatus('흑백 페이지 렌더링 중...', '');
     const renderedPages = []; // { srcCanvas, origW, origH }
     for (const file of files) {
-      setStatus(`고화질 렌더링 중: ${file.name}`, '');
       const pdfJs = await pdfjsLib.getDocument({ data: file.buf.slice(0) }).promise;
       for (let p = 0; p < pdfJs.numPages; p++) {
         const pdfPage = await pdfJs.getPage(p + 1);
@@ -1021,22 +1055,14 @@ async function processCombined() {
         srcCanvas.width = srcVp.width; srcCanvas.height = srcVp.height;
         await pdfPage.render({ canvasContext: srcCanvas.getContext('2d'), viewport: srcVp }).promise;
         renderedPages.push({ srcCanvas, origW, origH });
-        done++; showProgress((done/totalPages)*30);
       }
-    }
-
-    // 컬러 순서대로 전부 추가
-    setStatus('컬러 페이지 병합 중...', '');
-    for (const rp of renderedPages) {
-      await addPageToDoc(finalDoc, rp.srcCanvas, rp.origW, rp.origH, paper, false);
-      done++; showProgress(30 + (done/totalPages)*35);
     }
 
     // 흑백 순서대로 전부 추가
     setStatus('흑백 페이지 병합 중...', '');
     for (const rp of renderedPages) {
-      await addPageToDoc(finalDoc, rp.srcCanvas, rp.origW, rp.origH, paper, true);
-      done++; showProgress(65 + (done/totalPages)*35);
+      await addGrayscalePageToDoc(finalDoc, rp.srcCanvas, rp.origW, rp.origH, paper);
+      done++; showProgress(65 + (done/total)*35);
     }
 
     // 4. 물품검수서를 맨 마지막 페이지에 삽입
