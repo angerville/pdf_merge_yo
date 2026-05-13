@@ -953,7 +953,6 @@ async function processCombined() {
 
     // 3. 원본 화표 파일들 병합 — 컬러는 PDF 원본 그대로 복사, 흑백은 canvas 래스터 변환
     const SCALE = 5;
-    const total = files.reduce((s, f) => s + f.pages, 0);
 
     // ── 흑백 전용 헬퍼: canvas → 흑백 JPEG → PDF 페이지 추가 ──
     async function addGrayscalePageToDoc(doc, srcCanvas, origW, origH, paper) {
