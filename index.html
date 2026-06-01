@@ -1004,13 +1004,37 @@ async function processCombined() {
       pg.drawImage(img, { x: 0, y: 0, width: pageW, height: pageH });
     }
 
-    // ── 컬러: PDF 원본 페이지를 pdf-lib으로 직접 복사 (도장·투명 레이어 완전 보존) ──
-    setStatus('컬러 페이지 병합 중 (원본 그대로)...', '');
+    // ── 컬러: PDF 원본 페이지를 세로(portrait) A4 기준으로 변환하여 삽입 ──
+    // 가로 페이지는 세로 용지에 맞게 축소·중앙 배치 (세로 통일)
+    setStatus('컬러 페이지 병합 중 (세로 통일)...', '');
     for (const file of files) {
       try {
         const srcDoc = await PDFLib.PDFDocument.load(file.buf.slice(0), { ignoreEncryption: true });
-        const copiedPages = await finalDoc.copyPages(srcDoc, srcDoc.getPageIndices());
-        copiedPages.forEach(p => finalDoc.addPage(p));
+        const { width: pageW, height: pageH } = paper;
+
+        for (let pi = 0; pi < srcDoc.getPageCount(); pi++) {
+          const [embedded] = await finalDoc.embedPdf(srcDoc, [pi]);
+          const origW = embedded.width;
+          const origH = embedded.height;
+          const isLandscape = origW > origH;
+
+          const newPage = finalDoc.addPage([pageW, pageH]);
+
+          let drawX, drawY, drawW, drawH;
+          if (isLandscape && printMode === 'rotate') {
+            // 가로 PDF를 90도 회전하여 세로 용지에 꽉 채움
+            const s = Math.min(pageW / origH, pageH / origW);
+            drawW = origW * s; drawH = origH * s;
+            drawX = (pageW - drawH) / 2; drawY = (pageH - drawW) / 2;
+            newPage.drawPage(embedded, { x: drawX + drawH, y: drawY, width: drawW, height: drawH, rotate: PDFLib.degrees(90) });
+          } else {
+            // 세로 맞춤: 가로 페이지도 세로 용지에 비율 유지하며 축소
+            const s = Math.min(pageW / origW, pageH / origH);
+            drawW = origW * s; drawH = origH * s;
+            drawX = (pageW - drawW) / 2; drawY = (pageH - drawH) / 2;
+            newPage.drawPage(embedded, { x: drawX, y: drawY, width: drawW, height: drawH });
+          }
+        }
       } catch(e) {
         console.warn(`컬러 원본 복사 실패(${file.name}), canvas 렌더 폴백:`, e.message);
         // 폴백: canvas 렌더 후 컬러 JPEG으로 추가
