@@ -354,7 +354,7 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs
 // API 키는 HTML에 두지 않고 Google Apps Script 프록시(gemini_proxy.gs) 안에 숨겨둔다.
 // 아래 PROXY_URL 은 키가 아니라 단순 엔드포인트이므로 노출되어도 키가 새지 않는다.
 // gemini_proxy.gs 를 배포한 뒤 발급된 /exec URL 로 교체하세요. (기존 URL 그대로 재배포하면 동일하게 유지됨)
-const PROXY_URL = 'https://script.google.com/macros/s/AKfycbydqivDsdo_mvRfKWWHLN8l5fNJw9sqayFWVjoH4Pg64cCF4I2cldIxwKFyMdmB4Hg6kw/exec';
+const PROXY_URL = 'https://script.google.com/macros/s/AKfycbwjYF6W2G4y_FXIv_XWjNkuO79X0KTgOlaMDRZSH-J8Bo2-hzgcaWHu3mTf4UxhUlf-LA/exec';
 
 // parts(텍스트+이미지) 배열을 프록시로 보내고, Gemini 응답 본문 텍스트를 반환한다.
 // jsonOnly=true 이면 JSON 응답을 강제하고 출력 토큰을 넉넉히 확보해 항목 누락(잘림)을 방지한다.
